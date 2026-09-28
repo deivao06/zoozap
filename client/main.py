@@ -7,8 +7,8 @@ import sys
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, QUrl, QUrlQuery
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen, QRegion, QTransform
+from PySide6.QtCore import QPointF, QRect, Qt, QTimer, QUrl, QUrlQuery
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QRegion, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 from PySide6.QtWidgets import (
@@ -22,45 +22,15 @@ from PySide6.QtWidgets import (
 )
 
 import config
+import sprite
 from states import Capivara, State
 
-W, H = 200, 150
-CW, CH = 160, 110
+W = max(sprite.WALK_W + 160, sprite.PEEK_W + 60, sprite.PEEK_H + 60)
+H = max(sprite.WALK_H, sprite.PEEK_H, sprite.PEEK_W) + 30
 STRIP = 120
-PEEK = 0.35
-STEP = 0.04
-
-BROWN = QColor("#8b5a2b")
-DARK = QColor("#5e3b1a")
-WATER = QColor(80, 160, 220, 170)
-
-
-def draw_capivara(p: QPainter, phase: float, has_note: bool) -> None:
-    p.setPen(Qt.NoPen)
-    swing = math.sin(phase) * 4
-    p.setBrush(DARK)
-    for x, s in ((45, swing), (65, -swing), (110, -swing), (130, swing)):
-        p.drawRoundedRect(QRectF(x + s, 88, 12, 22), 4, 4)
-    p.setBrush(BROWN)
-    p.drawEllipse(QRectF(30, 35, 120, 62))
-    p.drawEllipse(QRectF(5, 20, 62, 50))
-    p.setBrush(DARK)
-    p.drawEllipse(QRectF(0, 40, 32, 28))
-    p.drawEllipse(QRectF(45, 14, 15, 15))
-    p.setBrush(Qt.black)
-    p.drawEllipse(QRectF(24, 34, 6, 6))
-    p.drawEllipse(QRectF(3, 48, 8, 6))
-    if has_note:
-        p.setBrush(QColor("#fffbe6"))
-        p.setPen(QPen(QColor("#999"), 1))
-        p.save()
-        p.translate(-6, 60)
-        p.rotate(-12)
-        p.drawRect(QRectF(0, 0, 22, 16))
-        p.drawLine(QPointF(4, 5), QPointF(18, 5))
-        p.drawLine(QPointF(4, 10), QPointF(14, 10))
-        p.restore()
-
+STEP = 0.06
+WALK_STEP = 0.015
+REST = 30
 
 class Note(QWidget):
     def __init__(self, on_done):
@@ -139,7 +109,8 @@ class Window(QWidget):
         self.cfg = cfg
         self.capivara = Capivara()
         self.reveal = 0.0
-        self.phase = 0.0
+        self.ticks = 0
+        self.pixmaps = sprite.frames()
         self.connected = False
         self.backoff = 1
 
@@ -169,7 +140,7 @@ class Window(QWidget):
     def place(self) -> None:
         g = QGuiApplication.primaryScreen().availableGeometry()
         if self.cfg.edge == "bottom":
-            self.move(g.right() - W - 60, g.bottom() - H + 1)
+            self.move(g.right() - W + 1, g.bottom() - H + 1)
         elif self.cfg.edge == "right":
             self.move(g.right() - W + 1, g.bottom() - H - 60)
         else:
@@ -177,31 +148,53 @@ class Window(QWidget):
 
     def strip_rect(self) -> QRect:
         if self.cfg.edge == "bottom":
-            return QRect((W - STRIP) // 2, H - 8, STRIP, 8)
+            return QRect((W - sprite.PEEK_W) // 2, H - 8, sprite.PEEK_W, 8)
         if self.cfg.edge == "right":
             return QRect(W - 8, H - STRIP, 8, STRIP)
         return QRect(0, H - STRIP, 8, STRIP)
 
+    def peeking(self) -> bool:
+        return self.capivara.state == State.PEEKING
+
+    def moving(self) -> bool:
+        return self.capivara.state in (State.ENTERING, State.LEAVING)
+
+    def pixmap(self):
+        if self.peeking():
+            frames = self.pixmaps[f"peek_{self.cfg.edge}"]
+            return frames[self.ticks // sprite.PEEK_TICKS % sprite.FRAMES]
+        walk = self.pixmaps["walk"]
+        return walk[self.ticks // sprite.WALK_TICKS % sprite.FRAMES] if self.moving() else walk[0]
+
     def frame_transform(self) -> QTransform:
-        t = QTransform()
+        pix = self.pixmap()
+        w, h = pix.width(), pix.height()
         r = self.reveal
-        if self.cfg.edge == "bottom":
-            shown = H - CH - 4
-            t.translate((W - CW) / 2, H + (shown - H) * r)
-        elif self.cfg.edge == "right":
-            shown = W - CW - 10
-            t.translate(W + (shown - W) * r, H - CH - 4)
+        t = QTransform()
+        if self.peeking():
+            if self.cfg.edge == "bottom":
+                t.translate((W - w) // 2, round(H - h * r))
+            elif self.cfg.edge == "right":
+                t.translate(round(W - w * r), H - h)
+            else:
+                t.translate(round(-w + w * r), H - h)
+            return t
+        if self.cfg.edge == "left":
+            x = round(-w + (W - REST) * r)
         else:
-            t.translate(-CW + (10 + CW) * r, H - CH - 4)
-            t.translate(CW, 0)
+            x = round(W - (W - REST) * r)
+        t.translate(x, H - h + sprite.SINK)
+        if (self.cfg.edge == "left") != (self.capivara.state == State.LEAVING):
+            t.translate(w, 0)
             t.scale(-1, 1)
         return t
 
     def capivara_rect(self) -> QRect:
-        return self.frame_transform().mapRect(QRect(-8, 0, CW + 8, CH)).intersected(self.rect())
+        pix = self.pixmap()
+        return self.frame_transform().mapRect(QRect(0, 0, pix.width(), pix.height())).intersected(self.rect())
 
     def badge_rect(self) -> QRect:
-        center = self.frame_transform().map(QPointF(50, 6))
+        center = self.frame_transform().map(QPointF(*sprite.BADGE_POS))
         return QRect(int(center.x()) - 11, max(int(center.y()) - 11, 0), 22, 22)
 
     def update_mask(self) -> None:
@@ -215,7 +208,7 @@ class Window(QWidget):
     def target(self) -> float:
         return {
             State.HIDDEN: 0.0,
-            State.PEEKING: PEEK,
+            State.PEEKING: 1.0,
             State.ENTERING: 1.0,
             State.WAITING: 1.0,
             State.READING: 1.0,
@@ -224,16 +217,18 @@ class Window(QWidget):
 
     def tick(self) -> None:
         goal = self.target()
+        step = WALK_STEP if self.moving() else STEP
+        before = self.pixmap()
         changed = self.reveal != goal
         if changed:
-            self.reveal = goal if abs(goal - self.reveal) <= STEP else self.reveal + math.copysign(STEP, goal - self.reveal)
-            if self.capivara.state in (State.ENTERING, State.LEAVING):
-                self.phase += 0.5
-        if self.reveal == goal and self.capivara.state in (State.ENTERING, State.LEAVING):
+            self.reveal = goal if abs(goal - self.reveal) <= step else self.reveal + math.copysign(step, goal - self.reveal)
+        if self.reveal == goal and self.moving():
             self.capivara.arrived()
             self.capivara.gone()
             changed = True
-        if changed:
+        if self.capivara.state != State.HIDDEN:
+            self.ticks += 1
+        if changed or self.pixmap() is not before:
             self.update_mask()
             self.update()
 
@@ -245,9 +240,8 @@ class Window(QWidget):
             return
         p.save()
         p.setTransform(self.frame_transform())
-        draw_capivara(p, self.phase, bool(self.capivara.pile))
+        p.drawPixmap(0, 0, self.pixmap())
         p.restore()
-        p.fillRect(QRect(0, H - 14, W, 14), WATER)
         if self.capivara.pile:
             badge = self.badge_rect()
             p.setPen(Qt.NoPen)
@@ -313,7 +307,10 @@ class Window(QWidget):
             return
         if data.get("type") != "message":
             return
+        was_peeking = self.peeking()
         self.capivara.message(data)
+        if was_peeking and not self.peeking():
+            self.reveal = 0.0
         self.update_mask()
         self.update()
 
