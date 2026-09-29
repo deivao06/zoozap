@@ -2,6 +2,8 @@ import html
 import json
 import math
 import os
+import random
+import socket
 import sys
 
 if sys.platform.startswith("linux"):
@@ -29,10 +31,23 @@ from states import Capivara, State
 W = max(sprite.WALK_W + 160, sprite.PEEK_W + 60, sprite.PEEK_H + 60)
 H = max(sprite.WALK_H, sprite.PEEK_H, sprite.PEEK_W) + 30
 STRIP = 120
-STEP = 0.06
+STEP = 0.09
 WALK_STEP = 0.015
-HIDE_STEP = 0.03
+HIDE_STEP = 0.045
+BUBBLE_EVERY = 150
+BUBBLE_FIRST = 30
+BUBBLE_LIFE = 60
+BUBBLE_GAP = 12
+BUBBLE_RISE = 50
+BUBBLE_PX = 3
+BUBBLE_BIG = (".XXX.", "X..OX", "X...X", "X...X", ".XXX.")
+BUBBLE_SMALL = (".X.", "X.X", ".X.")
+BUBBLE_POP = ("X.X", "...", "X.X")
+BUBBLE_INK = QColor(210, 240, 255, 220)
+BUBBLE_SHINE = QColor(255, 255, 255)
 REST = 30
+LIFT = 250
+PEEK_SINK = 8
 
 PX = 4
 TAIL = 3
@@ -77,6 +92,49 @@ CROSS = (
     "XX.....XX",
 )
 
+EDGE_LEFT = (
+    "XXXXXXXXX",
+    "XXX.....X",
+    "XXX.....X",
+    "XXX.....X",
+    "XXX.....X",
+    "XXX.....X",
+    "XXX.....X",
+    "XXX.....X",
+    "XXXXXXXXX",
+)
+EDGE_BOTTOM = (
+    "XXXXXXXXX",
+    "X.......X",
+    "X.......X",
+    "X.......X",
+    "X.......X",
+    "X.......X",
+    "XXXXXXXXX",
+    "XXXXXXXXX",
+    "XXXXXXXXX",
+)
+EDGE_RIGHT = (
+    "XXXXXXXXX",
+    "X.....XXX",
+    "X.....XXX",
+    "X.....XXX",
+    "X.....XXX",
+    "X.....XXX",
+    "X.....XXX",
+    "X.....XXX",
+    "XXXXXXXXX",
+)
+
+
+def local_ip() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except OSError:
+            return ""
+
 
 def pixel_icon(rows: tuple[str, ...]) -> QIcon:
     pix = QPixmap(len(rows[0]) * ICON_SCALE, len(rows) * ICON_SCALE)
@@ -90,9 +148,18 @@ def pixel_icon(rows: tuple[str, ...]) -> QIcon:
     return QIcon(pix)
 
 
+def icon_button(rows: tuple[str, ...], text: str) -> QToolButton:
+    button = QToolButton()
+    button.setIcon(pixel_icon(rows))
+    button.setIconSize(QSize(len(rows[0]) * ICON_SCALE, len(rows) * ICON_SCALE))
+    button.setText(text)
+    button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+    return button
+
+
 class Balloon(QWidget):
     def __init__(self, flags=Qt.Tool | Qt.WindowStaysOnTopHint):
-        super().__init__(None, flags | Qt.FramelessWindowHint)
+        super().__init__(None, flags | Qt.FramelessWindowHint | Qt.X11BypassWindowManagerHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.tail_x = 0
         font = QFont("monospace", 10)
@@ -103,8 +170,11 @@ class Balloon(QWidget):
             f"QLabel#muted {{ color: {MUTED}; }}"
             f"QPushButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: 2px 0; }}"
             f"QPushButton:hover {{ color: {ACCENT}; }}"
+            f"QPushButton#ip {{ color: {MUTED}; font-weight: normal; }}"
+            f"QPushButton#ip:hover {{ color: {ACCENT}; }}"
             f"QToolButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: {PX}px; }}"
             f"QToolButton:hover {{ background: #f3e2b8; }}"
+            f"QToolButton:checked {{ background: #ecd29a; }}"
             f"QToolButton:disabled {{ color: {MUTED}; }}"
             f"QTextBrowser {{ color: {INK}; background: transparent; border: none; }}"
             f"QScrollBar:vertical {{ background: transparent; width: {2 * PX}px; }}"
@@ -183,39 +253,80 @@ class Note(Balloon):
 
 
 class Menu(Balloon):
-    def __init__(self, on_history, on_closed):
+    def __init__(self, on_config, on_history, on_closed):
         super().__init__(Qt.Popup)
         self.on_closed = on_closed
         self.status_label = QLabel()
         bold = self.status_label.font()
         bold.setBold(True)
         self.status_label.setFont(bold)
+        self.ip = ""
+        self.ip_button = QPushButton(objectName="ip")
+        self.ip_button.setCursor(Qt.PointingHandCursor)
+        self.ip_button.clicked.connect(self.copy_ip)
+        header = QHBoxLayout()
+        header.addWidget(self.status_label)
+        header.addStretch()
+        header.addWidget(self.ip_button)
         row = QHBoxLayout()
         for icon, text, action in (
-            (GEAR, "CONFIG", None),
+            (GEAR, "CONFIG", on_config),
             (CLOCK, "HISTÓRICO", on_history),
             (CROSS, "SAIR", QApplication.quit),
         ):
-            button = QToolButton()
-            button.setIcon(pixel_icon(icon))
-            button.setIconSize(QSize(len(icon[0]) * ICON_SCALE, len(icon) * ICON_SCALE))
-            button.setText(text)
-            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            if action is None:
-                button.setEnabled(False)
-                button.setToolTip("em breve")
-            else:
-                button.clicked.connect(lambda _=False, a=action: (self.hide(), a()))
+            button = icon_button(icon, text)
+            button.clicked.connect(lambda _=False, a=action: (self.hide(), a()))
             row.addWidget(button)
-        self.box.addWidget(self.status_label)
+        self.box.addLayout(header)
+        self.box.addSpacing(3 * PX)
         self.box.addLayout(row)
 
-    def show_menu(self, status: str, anchor: QRect) -> None:
+    def show_menu(self, status: str, ip: str, anchor: QRect) -> None:
         self.status_label.setText(status)
+        self.ip = ip
+        self.ip_button.setText(ip)
+        self.ip_button.setVisible(bool(ip))
         self.show_at(anchor)
+
+    def copy_ip(self) -> None:
+        QGuiApplication.clipboard().setText(self.ip)
+        self.ip_button.setText("copiado!")
+        QTimer.singleShot(1000, lambda: self.ip_button.setText(self.ip))
 
     def hideEvent(self, event) -> None:
         self.on_closed()
+
+
+class Settings(Balloon):
+    def __init__(self, on_edge, on_done):
+        super().__init__()
+        title = QLabel("CONFIG")
+        bold = title.font()
+        bold.setBold(True)
+        title.setFont(bold)
+        row = QHBoxLayout()
+        self.edge_buttons = {}
+        for edge, icon, text in (
+            ("left", EDGE_LEFT, "ESQUERDA"),
+            ("bottom", EDGE_BOTTOM, "BAIXO"),
+            ("right", EDGE_RIGHT, "DIREITA"),
+        ):
+            button = icon_button(icon, text)
+            button.setCheckable(True)
+            button.clicked.connect(lambda _=False, e=edge: on_edge(e))
+            row.addWidget(button)
+            self.edge_buttons[edge] = button
+        button = QPushButton("◀ VOLTAR")
+        button.clicked.connect(on_done)
+        self.box.addWidget(title)
+        self.box.addWidget(QLabel("BORDA", objectName="muted"))
+        self.box.addLayout(row)
+        self.box.addWidget(button, alignment=Qt.AlignRight)
+
+    def show_settings(self, edge: str, anchor: QRect) -> None:
+        for e, button in self.edge_buttons.items():
+            button.setChecked(e == edge)
+        self.show_at(anchor)
 
 
 class History(Balloon):
@@ -269,18 +380,22 @@ class Window(QWidget):
         self.capivara = Capivara()
         self.reveal = 0.0
         self.ticks = 0
+        self.clock = 0
+        self.bubbles: list[tuple[int, int, tuple[str, ...]]] = []
+        self.next_wave = BUBBLE_FIRST
         self.pixmaps = sprite.frames()
         self.connected = False
         self.backoff = 1
 
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(W, H)
+        self.setFixedSize(*self.edge_size())
         self.place()
 
         self.note = Note(self.on_note_done)
         self.history = History(self.on_history_done)
-        self.menu = Menu(self.load_history, self.on_menu_closed)
+        self.settings = Settings(self.set_edge, self.show_menu)
+        self.menu = Menu(self.show_settings, self.load_history, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
         self.ws = QWebSocket()
@@ -297,21 +412,42 @@ class Window(QWidget):
         self.update_mask()
         self.open_socket()
 
+    def edge_size(self) -> tuple[int, int]:
+        return (W, H) if self.cfg.edge == "bottom" else (H, W + LIFT)
+
     def place(self) -> None:
         g = QGuiApplication.primaryScreen().availableGeometry()
-        if self.cfg.edge == "bottom":
-            self.move(g.right() - W + 1, g.bottom() - H + 1)
-        elif self.cfg.edge == "right":
-            self.move(g.right() - W + 1, g.bottom() - H - 60)
-        else:
-            self.move(g.left(), g.bottom() - H - 60)
+        x = g.left() if self.cfg.edge == "left" else g.right() - self.width() + 1
+        self.move(x, g.bottom() - self.height() + 1)
 
     def strip_rect(self) -> QRect:
+        sw, sh = self.width(), self.height()
         if self.cfg.edge == "bottom":
-            return QRect((W - sprite.PEEK_W) // 2, H - 8, sprite.PEEK_W, 8)
+            return QRect((sw - sprite.PEEK_W) // 2, sh - 8, sprite.PEEK_W, 8)
         if self.cfg.edge == "right":
-            return QRect(W - 8, H - STRIP, 8, STRIP)
-        return QRect(0, H - STRIP, 8, STRIP)
+            return QRect(sw - 8, sh - LIFT - STRIP, 8, STRIP)
+        return QRect(0, sh - LIFT - STRIP, 8, STRIP)
+
+    def bubble_rects(self) -> list[tuple[QRect, tuple[str, ...]]]:
+        strip = self.strip_rect()
+        out = []
+        for birth, along, rows in self.bubbles:
+            age = self.clock - birth
+            if not 0 <= age < BUBBLE_LIFE:
+                continue
+            if age >= BUBBLE_LIFE - 4:
+                rows = BUBBLE_POP
+            size = len(rows) * BUBBLE_PX
+            d = 4 + BUBBLE_RISE * age // BUBBLE_LIFE
+            a = along + round(2 * math.sin(age / 5))
+            if self.cfg.edge == "bottom":
+                x, y = strip.left() + a, self.height() - d - size
+            elif self.cfg.edge == "right":
+                x, y = self.width() - d - size, strip.top() + a
+            else:
+                x, y = d, strip.top() + a
+            out.append((QRect(x, y, size, size), rows))
+        return out
 
     def peeking(self) -> bool:
         return self.capivara.state == State.PEEKING or (self.capivara.state == State.HIDDEN and self.reveal > 0)
@@ -331,25 +467,32 @@ class Window(QWidget):
     def frame_transform(self) -> QTransform:
         pix = self.pixmap()
         w, h = pix.width(), pix.height()
+        sw, sh = self.width(), self.height()
         r = self.reveal
         t = QTransform()
         if self.peeking():
             if self.cfg.edge == "bottom":
-                t.translate((W - w) // 2, round(H - h * r))
+                t.translate((sw - w) // 2, round(sh - h * r) + PEEK_SINK)
             elif self.cfg.edge == "right":
-                t.translate(round(W - w * r), H - h)
+                t.translate(round(sw - w * r) + PEEK_SINK, sh - h - LIFT)
             else:
-                t.translate(round(-w + w * r), H - h)
+                t.translate(round(-w + w * r) - PEEK_SINK, sh - h - LIFT)
             return t
-        if self.cfg.edge == "left":
-            x = round(-w + (W - REST) * r)
+        if self.cfg.edge == "bottom":
+            t.translate(round(sw - (sw - REST) * r), sh - h + sprite.SINK)
+            if self.capivara.state == State.LEAVING:
+                t.translate(w, 0)
+                t.scale(-1, 1)
+            return t
+        if self.cfg.edge == "right":
+            t.translate(sw - h + sprite.SINK, round(sh - (sh - REST) * r))
         else:
-            x = round(W - (W - REST) * r)
-        t.translate(x, H - h + sprite.SINK)
-        if (self.cfg.edge == "left") != (self.capivara.state == State.LEAVING):
-            t.translate(w, 0)
+            t.translate(h - sprite.SINK, round(sh - (sh - REST) * r))
             t.scale(-1, 1)
-        return t
+        if self.capivara.state == State.LEAVING:
+            t.translate(0, w)
+            t.scale(1, -1)
+        return QTransform(0, 1, 1, 0, 0, 0) * t
 
     def capivara_rect(self) -> QRect:
         pix = self.pixmap()
@@ -367,6 +510,8 @@ class Window(QWidget):
 
     def update_mask(self) -> None:
         region = QRegion(self.strip_rect())
+        for rect, _ in self.bubble_rects():
+            region = region.united(QRegion(rect))
         if self.capivara.state != State.HIDDEN or self.reveal > 0:
             region = region.united(QRegion(self.capivara_rect()))
             if self.capivara.pile:
@@ -384,6 +529,24 @@ class Window(QWidget):
         }[self.capivara.state]
 
     def tick(self) -> None:
+        self.clock += 1
+        if self.capivara.state == State.HIDDEN and self.reveal == 0:
+            if self.clock >= self.next_wave:
+                self.next_wave = self.clock + BUBBLE_EVERY
+                strip = self.strip_rect()
+                span = strip.width() if self.cfg.edge == "bottom" else strip.height()
+                self.bubbles = [
+                    (self.clock + i * BUBBLE_GAP, random.randint(6, span - 12), random.choice((BUBBLE_BIG, BUBBLE_SMALL)))
+                    for i in range(3)
+                ]
+            if self.bubbles:
+                if self.clock - self.bubbles[-1][0] >= BUBBLE_LIFE:
+                    self.bubbles = []
+                self.update_mask()
+                self.update()
+        else:
+            self.bubbles = []
+            self.next_wave = self.clock + BUBBLE_FIRST
         goal = self.target()
         step = WALK_STEP if self.moving() else HIDE_STEP if self.capivara.state == State.HIDDEN else STEP
         before = self.pixmap()
@@ -408,6 +571,12 @@ class Window(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.strip_rect(), QColor(0, 0, 0, 1))
+        for rect, rows in self.bubble_rects():
+            for y, row in enumerate(rows):
+                for x, cell in enumerate(row):
+                    if cell != ".":
+                        color = BUBBLE_SHINE if cell == "O" else BUBBLE_INK
+                        p.fillRect(rect.x() + x * BUBBLE_PX, rect.y() + y * BUBBLE_PX, BUBBLE_PX, BUBBLE_PX, color)
         if self.capivara.state == State.HIDDEN and self.reveal == 0:
             return
         p.save()
@@ -428,7 +597,7 @@ class Window(QWidget):
         self.update_mask()
 
     def leaveEvent(self, event) -> None:
-        if not self.history.isVisible() and not self.menu.isVisible():
+        if not any(b.isVisible() for b in (self.history, self.menu, self.settings)):
             self.capivara.hover_out()
 
     def mousePressEvent(self, event) -> None:
@@ -452,7 +621,26 @@ class Window(QWidget):
 
     def show_menu(self) -> None:
         self.history.hide()
-        self.menu.show_menu(self.cfg.name if self.connected else "desconectado", self.anchor())
+        self.settings.hide()
+        self.menu.show_menu(self.cfg.name if self.connected else "desconectado", local_ip(), self.anchor())
+
+    def show_settings(self) -> None:
+        self.capivara.hover_in()
+        self.update_mask()
+        self.settings.show_settings(self.cfg.edge, self.anchor())
+
+    def set_edge(self, edge: str) -> None:
+        self.settings.show_settings(self.cfg.edge, self.anchor())
+        if edge == self.cfg.edge:
+            return
+        self.cfg.edge = edge
+        config.save_edge(edge)
+        self.setFixedSize(*self.edge_size())
+        self.place()
+        self.reveal = 0.0
+        self.update_mask()
+        self.update()
+        self.settings.show_settings(edge, self.anchor())
 
     def on_history_done(self) -> None:
         self.show_menu()

@@ -1,4 +1,5 @@
 import os
+import re
 import socket
 import sys
 import tomllib
@@ -63,3 +64,13 @@ def load() -> Config:
         edge=edge,
         client_id=client_id,
     )
+
+
+def save_edge(edge: str) -> None:
+    config_file = config_dir() / "config.toml"
+    text = config_file.read_text(encoding="utf-8")
+    line = f'edge = "{edge}"   # bottom | left | right'
+    text, count = re.subn(r"(?m)^edge\s*=.*$", line, text)
+    if count == 0:
+        text = text.rstrip("\n") + "\n" + line + "\n"
+    config_file.write_text(text, encoding="utf-8")
