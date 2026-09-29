@@ -7,16 +7,17 @@ import sys
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QPointF, QRect, Qt, QTimer, QUrl, QUrlQuery
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QRegion, QTransform
+from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLabel,
-    QMenu,
     QPushButton,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,18 +31,132 @@ H = max(sprite.WALK_H, sprite.PEEK_H, sprite.PEEK_W) + 30
 STRIP = 120
 STEP = 0.06
 WALK_STEP = 0.015
+HIDE_STEP = 0.03
 REST = 30
 
-class Note(QWidget):
-    def __init__(self, on_done):
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+PX = 4
+TAIL = 3
+PAPER = "#fff4d6"
+INK = "#3b2414"
+MUTED = "#8a5a2b"
+ACCENT = "#c8742c"
+SHADOW = QColor(0, 0, 0, 70)
+
+ICON_SCALE = 3
+GEAR = (
+    "....X....",
+    ".X.XXX.X.",
+    "..XXXXX..",
+    ".XXX.XXX.",
+    "XXX...XXX",
+    ".XXX.XXX.",
+    "..XXXXX..",
+    ".X.XXX.X.",
+    "....X....",
+)
+CLOCK = (
+    "..XXXXX..",
+    ".X.....X.",
+    "X...X...X",
+    "X...X...X",
+    "X...XXX.X",
+    "X.......X",
+    "X.......X",
+    ".X.....X.",
+    "..XXXXX..",
+)
+CROSS = (
+    "XX.....XX",
+    "XXX...XXX",
+    ".XXX.XXX.",
+    "..XXXXX..",
+    "...XXX...",
+    "..XXXXX..",
+    ".XXX.XXX.",
+    "XXX...XXX",
+    "XX.....XX",
+)
+
+
+def pixel_icon(rows: tuple[str, ...]) -> QIcon:
+    pix = QPixmap(len(rows[0]) * ICON_SCALE, len(rows) * ICON_SCALE)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    for y, row in enumerate(rows):
+        for x, cell in enumerate(row):
+            if cell == "X":
+                p.fillRect(x * ICON_SCALE, y * ICON_SCALE, ICON_SCALE, ICON_SCALE, QColor(INK))
+    p.end()
+    return QIcon(pix)
+
+
+class Balloon(QWidget):
+    def __init__(self, flags=Qt.Tool | Qt.WindowStaysOnTopHint):
+        super().__init__(None, flags | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.tail_x = 0
+        font = QFont("monospace", 10)
+        font.setStyleHint(QFont.Monospace)
+        self.setFont(font)
         self.setStyleSheet(
-            "QWidget { background: #fffbe6; color: #222; }"
-            "QLabel#sender { color: #777; }"
-            "QPushButton { padding: 4px 16px; }"
+            f"QLabel {{ color: {INK}; background: transparent; }}"
+            f"QLabel#muted {{ color: {MUTED}; }}"
+            f"QPushButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: 2px 0; }}"
+            f"QPushButton:hover {{ color: {ACCENT}; }}"
+            f"QToolButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: {PX}px; }}"
+            f"QToolButton:hover {{ background: #f3e2b8; }}"
+            f"QToolButton:disabled {{ color: {MUTED}; }}"
+            f"QTextBrowser {{ color: {INK}; background: transparent; border: none; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: {2 * PX}px; }}"
+            f"QScrollBar::handle:vertical {{ background: {INK}; min-height: {4 * PX}px; }}"
+            "QScrollBar::add-line, QScrollBar::sub-line { height: 0; }"
+            "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
         )
-        self.setFixedWidth(280)
-        self.sender_label = QLabel(objectName="sender")
+        self.box = QVBoxLayout(self)
+        self.box.setContentsMargins(3 * PX, 3 * PX, 4 * PX, 4 * PX + TAIL * PX)
+
+    def body_rect(self) -> QRect:
+        return QRect(0, 0, self.width() - PX, self.height() - PX - TAIL * PX)
+
+    def shape(self, inset: int) -> QRegion:
+        body = self.body_rect()
+        b = body.adjusted(inset, inset, -inset, -inset)
+        region = QRegion(b.adjusted(PX, 0, -PX, 0)).united(QRegion(b.adjusted(0, PX, 0, -PX)))
+        bottom = body.y() + body.height()
+        for i in range(TAIL):
+            half = (TAIL - i) * PX - inset
+            if half > 0:
+                region = region.united(QRegion(self.tail_x - half, bottom - inset + i * PX, 2 * half, PX))
+        return region
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        for region, color in (
+            (self.shape(0).translated(PX, PX), SHADOW),
+            (self.shape(0), QColor(INK)),
+            (self.shape(PX), QColor(PAPER)),
+        ):
+            p.setClipRegion(region)
+            p.fillRect(self.rect(), color)
+
+    def show_at(self, anchor: QRect) -> None:
+        self.adjustSize()
+        screen = (QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()).availableGeometry()
+        x = min(max(anchor.center().x() - self.width() // 2, screen.left()), screen.right() - self.width())
+        y = max(anchor.top() - self.height() + PX, screen.top())
+        edge = (TAIL + 2) * PX
+        self.tail_x = min(max(anchor.center().x() - x, edge), self.width() - PX - edge)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.update()
+
+
+class Note(Balloon):
+    def __init__(self, on_done):
+        super().__init__()
+        self.setFixedWidth(300)
+        self.sender_label = QLabel(objectName="muted")
         self.title_label = QLabel()
         bold = self.title_label.font()
         bold.setBold(True)
@@ -50,50 +165,94 @@ class Note(QWidget):
         for label in (self.sender_label, self.title_label, self.text_label):
             label.setWordWrap(True)
             label.setTextFormat(Qt.PlainText)
-        button = QPushButton("Lido")
+        button = QPushButton("▶ LIDO")
         button.clicked.connect(on_done)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.sender_label)
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.text_label)
-        layout.addWidget(button, alignment=Qt.AlignRight)
+        self.box.addWidget(self.sender_label)
+        self.box.addWidget(self.title_label)
+        self.box.addWidget(self.text_label)
+        self.box.addWidget(button, alignment=Qt.AlignRight)
 
     def show_message(self, msg: dict, anchor: QRect) -> None:
         sender, title = msg.get("sender"), msg.get("title")
         self.sender_label.setText(f"de {sender}" if sender else "")
         self.sender_label.setVisible(bool(sender))
-        self.title_label.setText(title or "")
+        self.title_label.setText((title or "").upper())
         self.title_label.setVisible(bool(title))
         self.text_label.setText(msg["text"])
-        self.adjustSize()
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        x = min(max(anchor.center().x() - self.width() // 2, screen.left()), screen.right() - self.width())
-        y = max(anchor.top() - self.height() - 8, screen.top())
-        self.move(x, y)
-        self.show()
-        self.raise_()
+        self.show_at(anchor)
 
 
-class History(QTextBrowser):
-    def __init__(self):
+class Menu(Balloon):
+    def __init__(self, on_history, on_closed):
+        super().__init__(Qt.Popup)
+        self.on_closed = on_closed
+        self.status_label = QLabel()
+        bold = self.status_label.font()
+        bold.setBold(True)
+        self.status_label.setFont(bold)
+        row = QHBoxLayout()
+        for icon, text, action in (
+            (GEAR, "CONFIG", None),
+            (CLOCK, "HISTÓRICO", on_history),
+            (CROSS, "SAIR", QApplication.quit),
+        ):
+            button = QToolButton()
+            button.setIcon(pixel_icon(icon))
+            button.setIconSize(QSize(len(icon[0]) * ICON_SCALE, len(icon) * ICON_SCALE))
+            button.setText(text)
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            if action is None:
+                button.setEnabled(False)
+                button.setToolTip("em breve")
+            else:
+                button.clicked.connect(lambda _=False, a=action: (self.hide(), a()))
+            row.addWidget(button)
+        self.box.addWidget(self.status_label)
+        self.box.addLayout(row)
+
+    def show_menu(self, status: str, anchor: QRect) -> None:
+        self.status_label.setText(status)
+        self.show_at(anchor)
+
+    def hideEvent(self, event) -> None:
+        self.on_closed()
+
+
+class History(Balloon):
+    def __init__(self, on_done):
         super().__init__()
-        self.setWindowTitle("Capivara — histórico")
-        self.resize(420, 480)
+        self.setFixedWidth(340)
+        title = QLabel("HISTÓRICO")
+        bold = title.font()
+        bold.setBold(True)
+        title.setFont(bold)
+        self.browser = QTextBrowser()
+        button = QPushButton("◀ VOLTAR")
+        button.clicked.connect(on_done)
+        self.box.addWidget(title)
+        self.box.addWidget(self.browser)
+        self.box.addWidget(button, alignment=Qt.AlignRight)
 
-    def show_items(self, items: list[dict]) -> None:
+    def show_html(self, body: str, anchor: QRect) -> None:
+        self.browser.setHtml(body)
+        doc = self.browser.document()
+        doc.setDocumentMargin(0)
+        doc.setTextWidth(self.width() - 9 * PX)
+        self.browser.setFixedHeight(min(int(doc.size().height()) + 4, 320))
+        self.show_at(anchor)
+
+    def show_items(self, items: list[dict], anchor: QRect) -> None:
         if not items:
-            self.setHtml("<p><i>Nenhuma mensagem lida ainda.</i></p>")
-        else:
-            parts = []
-            for m in items:
-                head = " · ".join(html.escape(v) for v in (m.get("sender"), m.get("title")) if v)
-                when = html.escape((m.get("read_at") or "")[:16].replace("T", " "))
-                parts.append(
-                    f"<p><small style='color:#777'>{when} {head}</small><br>{html.escape(m['text'])}</p>"
-                )
-            self.setHtml("<hr>".join(parts))
-        self.show()
-        self.raise_()
+            self.show_html("<p><i>Nenhuma mensagem lida ainda.</i></p>", anchor)
+            return
+        parts = []
+        for m in items:
+            head = " · ".join(html.escape(v) for v in (m.get("sender"), m.get("title")) if v)
+            when = html.escape((m.get("read_at") or "")[:16].replace("T", " "))
+            parts.append(
+                f"<p style='margin-bottom:10px'><span style='color:{MUTED}'>{when} {head}</span><br>{html.escape(m['text'])}</p>"
+            )
+        self.show_html("".join(parts), anchor)
 
 
 class Window(QWidget):
@@ -120,7 +279,8 @@ class Window(QWidget):
         self.place()
 
         self.note = Note(self.on_note_done)
-        self.history = History()
+        self.history = History(self.on_history_done)
+        self.menu = Menu(self.load_history, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
         self.ws = QWebSocket()
@@ -154,7 +314,7 @@ class Window(QWidget):
         return QRect(0, H - STRIP, 8, STRIP)
 
     def peeking(self) -> bool:
-        return self.capivara.state == State.PEEKING
+        return self.capivara.state == State.PEEKING or (self.capivara.state == State.HIDDEN and self.reveal > 0)
 
     def moving(self) -> bool:
         return self.capivara.state in (State.ENTERING, State.LEAVING)
@@ -162,6 +322,8 @@ class Window(QWidget):
     def pixmap(self):
         if self.peeking():
             frames = self.pixmaps[f"peek_{self.cfg.edge}"]
+            if self.capivara.state != State.PEEKING or self.reveal < 1:
+                return frames[0]
             return frames[self.ticks // sprite.PEEK_TICKS % sprite.FRAMES]
         walk = self.pixmaps["walk"]
         return walk[self.ticks // sprite.WALK_TICKS % sprite.FRAMES] if self.moving() else walk[0]
@@ -193,13 +355,19 @@ class Window(QWidget):
         pix = self.pixmap()
         return self.frame_transform().mapRect(QRect(0, 0, pix.width(), pix.height())).intersected(self.rect())
 
+    def anchor(self) -> QRect:
+        reveal, self.reveal = self.reveal, self.target()
+        rect = self.capivara_rect()
+        self.reveal = reveal
+        return rect.translated(self.pos())
+
     def badge_rect(self) -> QRect:
         center = self.frame_transform().map(QPointF(*sprite.BADGE_POS))
         return QRect(int(center.x()) - 11, max(int(center.y()) - 11, 0), 22, 22)
 
     def update_mask(self) -> None:
         region = QRegion(self.strip_rect())
-        if self.capivara.state != State.HIDDEN:
+        if self.capivara.state != State.HIDDEN or self.reveal > 0:
             region = region.united(QRegion(self.capivara_rect()))
             if self.capivara.pile:
                 region = region.united(QRegion(self.badge_rect()))
@@ -217,11 +385,13 @@ class Window(QWidget):
 
     def tick(self) -> None:
         goal = self.target()
-        step = WALK_STEP if self.moving() else STEP
+        step = WALK_STEP if self.moving() else HIDE_STEP if self.capivara.state == State.HIDDEN else STEP
         before = self.pixmap()
         changed = self.reveal != goal
         if changed:
             self.reveal = goal if abs(goal - self.reveal) <= step else self.reveal + math.copysign(step, goal - self.reveal)
+            if self.reveal == 1 and self.peeking():
+                self.ticks = 0
         if self.reveal == goal and self.moving():
             self.capivara.arrived()
             self.capivara.gone()
@@ -229,6 +399,8 @@ class Window(QWidget):
         if self.capivara.state != State.HIDDEN:
             self.ticks += 1
         if changed or self.pixmap() is not before:
+            if changed:
+                self.raise_()
             self.update_mask()
             self.update()
 
@@ -256,30 +428,38 @@ class Window(QWidget):
         self.update_mask()
 
     def leaveEvent(self, event) -> None:
-        self.capivara.hover_out()
+        if not self.history.isVisible() and not self.menu.isVisible():
+            self.capivara.hover_out()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self.capivara.click()
-            if self.capivara.state == State.READING:
-                self.note.show_message(self.capivara.current, self.geometry())
-        elif event.button() == Qt.RightButton and self.capivara.state in (State.PEEKING, State.WAITING):
-            self.show_menu(event.globalPosition().toPoint())
-
-    def show_menu(self, pos) -> None:
-        menu = QMenu()
-        status = f"conectado como {self.cfg.name}" if self.connected else "desconectado"
-        menu.addAction(status).setEnabled(False)
-        menu.addSeparator()
-        menu.addAction("Histórico", self.load_history)
-        menu.addAction("Sair", QApplication.quit)
-        menu.exec(pos)
+        if event.button() != Qt.LeftButton:
+            return
+        if self.peeking():
+            self.show_menu()
+            return
+        self.capivara.click()
+        if self.capivara.state == State.READING:
+            self.history.hide()
+            self.note.show_message(self.capivara.current, self.anchor())
 
     def on_note_done(self) -> None:
         self.note.hide()
         read = self.capivara.note_closed()
         if read is not None and self.connected:
             self.ws.sendTextMessage(json.dumps({"type": "read", "id": read["id"]}))
+        self.update_mask()
+        self.update()
+
+    def show_menu(self) -> None:
+        self.history.hide()
+        self.menu.show_menu(self.cfg.name if self.connected else "desconectado", self.anchor())
+
+    def on_history_done(self) -> None:
+        self.show_menu()
+
+    def on_menu_closed(self) -> None:
+        if not self.underMouse() and not self.history.isVisible():
+            self.capivara.hover_out()
         self.update_mask()
         self.update()
 
@@ -315,6 +495,8 @@ class Window(QWidget):
         self.update()
 
     def load_history(self) -> None:
+        self.capivara.hover_in()
+        self.update_mask()
         url = QUrl(self.cfg.server.rstrip("/") + "/history")
         query = QUrlQuery()
         query.addQueryItem("id", self.cfg.client_id)
@@ -324,10 +506,9 @@ class Window(QWidget):
 
     def on_history(self, reply: QNetworkReply) -> None:
         if reply.error() == QNetworkReply.NoError:
-            self.history.show_items(json.loads(bytes(reply.readAll())))
+            self.history.show_items(json.loads(bytes(reply.readAll())), self.anchor())
         else:
-            self.history.setHtml("<p><i>Não consegui falar com o servidor.</i></p>")
-            self.history.show()
+            self.history.show_html("<p><i>Não consegui falar com o servidor.</i></p>", self.anchor())
         reply.deleteLater()
 
 
