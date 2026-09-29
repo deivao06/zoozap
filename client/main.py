@@ -125,6 +125,9 @@ EDGE_RIGHT = (
     "X.....XXX",
     "XXXXXXXXX",
 )
+DOT = (".XXX.", "XXXXX", "XXXXX", "XXXXX", ".XXX.")
+ONLINE = "#4caf50"
+OFFLINE = "#d33333"
 
 
 def local_ip() -> str:
@@ -136,16 +139,20 @@ def local_ip() -> str:
             return ""
 
 
-def pixel_icon(rows: tuple[str, ...]) -> QIcon:
-    pix = QPixmap(len(rows[0]) * ICON_SCALE, len(rows) * ICON_SCALE)
+def pixel_pixmap(rows: tuple[str, ...], color: str = INK, scale: int = ICON_SCALE) -> QPixmap:
+    pix = QPixmap(len(rows[0]) * scale, len(rows) * scale)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
     for y, row in enumerate(rows):
         for x, cell in enumerate(row):
             if cell == "X":
-                p.fillRect(x * ICON_SCALE, y * ICON_SCALE, ICON_SCALE, ICON_SCALE, QColor(INK))
+                p.fillRect(x * scale, y * scale, scale, scale, QColor(color))
     p.end()
-    return QIcon(pix)
+    return pix
+
+
+def pixel_icon(rows: tuple[str, ...]) -> QIcon:
+    return QIcon(pixel_pixmap(rows))
 
 
 def icon_button(rows: tuple[str, ...], text: str) -> QToolButton:
@@ -264,7 +271,9 @@ class Menu(Balloon):
         self.ip_button = QPushButton(objectName="ip")
         self.ip_button.setCursor(Qt.PointingHandCursor)
         self.ip_button.clicked.connect(self.copy_ip)
+        self.dot = QLabel()
         header = QHBoxLayout()
+        header.addWidget(self.dot)
         header.addWidget(self.status_label)
         header.addStretch()
         header.addWidget(self.ip_button)
@@ -281,8 +290,9 @@ class Menu(Balloon):
         self.box.addSpacing(3 * PX)
         self.box.addLayout(row)
 
-    def show_menu(self, status: str, ip: str, anchor: QRect) -> None:
-        self.status_label.setText(status)
+    def show_menu(self, name: str, connected: bool, ip: str, anchor: QRect) -> None:
+        self.dot.setPixmap(pixel_pixmap(DOT, ONLINE if connected else OFFLINE, 2))
+        self.status_label.setText(name if connected else "desconectado")
         self.ip = ip
         self.ip_button.setText(ip)
         self.ip_button.setVisible(bool(ip))
@@ -298,7 +308,7 @@ class Menu(Balloon):
 
 
 class Settings(Balloon):
-    def __init__(self, on_edge, on_done):
+    def __init__(self, on_edge, on_invite, on_done):
         super().__init__()
         title = QLabel("CONFIG")
         bold = title.font()
@@ -316,17 +326,33 @@ class Settings(Balloon):
             button.clicked.connect(lambda _=False, e=edge: on_edge(e))
             row.addWidget(button)
             self.edge_buttons[edge] = button
+        self.on_invite = on_invite
+        self.server_label = QLabel()
+        self.invite_button = QPushButton("▶ COLAR CONVITE")
+        self.invite_button.clicked.connect(self.paste_invite)
         button = QPushButton("◀ VOLTAR")
         button.clicked.connect(on_done)
         self.box.addWidget(title)
         self.box.addWidget(QLabel("BORDA", objectName="muted"))
         self.box.addLayout(row)
+        self.box.addSpacing(2 * PX)
+        self.box.addWidget(QLabel("SERVIDOR", objectName="muted"))
+        self.box.addWidget(self.server_label)
+        self.box.addWidget(self.invite_button, alignment=Qt.AlignLeft)
         self.box.addWidget(button, alignment=Qt.AlignRight)
 
-    def show_settings(self, edge: str, anchor: QRect) -> None:
+    def show_settings(self, edge: str, server: str, anchor: QRect) -> None:
         for e, button in self.edge_buttons.items():
             button.setChecked(e == edge)
+        self.server_label.setText(server)
         self.show_at(anchor)
+
+    def paste_invite(self) -> None:
+        server = self.on_invite(QGuiApplication.clipboard().text())
+        if server:
+            self.server_label.setText(server)
+        self.invite_button.setText("colado!" if server else "convite inválido")
+        QTimer.singleShot(1500, lambda: self.invite_button.setText("▶ COLAR CONVITE"))
 
 
 class History(Balloon):
@@ -394,7 +420,7 @@ class Window(QWidget):
 
         self.note = Note(self.on_note_done)
         self.history = History(self.on_history_done)
-        self.settings = Settings(self.set_edge, self.show_menu)
+        self.settings = Settings(self.set_edge, self.use_invite, self.show_menu)
         self.menu = Menu(self.show_settings, self.load_history, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
@@ -622,25 +648,37 @@ class Window(QWidget):
     def show_menu(self) -> None:
         self.history.hide()
         self.settings.hide()
-        self.menu.show_menu(self.cfg.name if self.connected else "desconectado", local_ip(), self.anchor())
+        self.menu.show_menu(self.cfg.name, self.connected, local_ip(), self.anchor())
 
     def show_settings(self) -> None:
         self.capivara.hover_in()
         self.update_mask()
-        self.settings.show_settings(self.cfg.edge, self.anchor())
+        self.settings.show_settings(self.cfg.edge, self.cfg.server, self.anchor())
+
+    def use_invite(self, text: str) -> str:
+        invite = config.parse_invite(text)
+        if invite is None:
+            return ""
+        self.cfg.server, self.cfg.key = invite
+        config.save(server=self.cfg.server, key=self.cfg.key)
+        self.backoff = 1
+        self.ws.close()
+        if self.reconnect_timer.isActive():
+            self.reconnect_timer.start(0)
+        return self.cfg.server
 
     def set_edge(self, edge: str) -> None:
-        self.settings.show_settings(self.cfg.edge, self.anchor())
+        self.settings.show_settings(self.cfg.edge, self.cfg.server, self.anchor())
         if edge == self.cfg.edge:
             return
         self.cfg.edge = edge
-        config.save_edge(edge)
+        config.save(edge=edge)
         self.setFixedSize(*self.edge_size())
         self.place()
         self.reveal = 0.0
         self.update_mask()
         self.update()
-        self.settings.show_settings(edge, self.anchor())
+        self.settings.show_settings(edge, self.cfg.server, self.anchor())
 
     def on_history_done(self) -> None:
         self.show_menu()
@@ -656,6 +694,7 @@ class Window(QWidget):
         query = QUrlQuery()
         query.addQueryItem("id", self.cfg.client_id)
         query.addQueryItem("name", self.cfg.name)
+        query.addQueryItem("key", self.cfg.key)
         url.setQuery(query)
         self.ws.open(url)
 
@@ -688,6 +727,7 @@ class Window(QWidget):
         url = QUrl(self.cfg.server.rstrip("/") + "/history")
         query = QUrlQuery()
         query.addQueryItem("id", self.cfg.client_id)
+        query.addQueryItem("key", self.cfg.key)
         url.setQuery(query)
         reply = self.http.get(QNetworkRequest(url))
         reply.finished.connect(lambda: self.on_history(reply))

@@ -1,13 +1,16 @@
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 DB_PATH = os.environ.get("CAPIVARA_DB", "capivara.db")
+KEY_PATH = os.path.join(os.path.dirname(DB_PATH) or ".", "key")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -51,9 +54,31 @@ def message_payload(row: sqlite3.Row) -> dict:
     }
 
 
+def load_key() -> str:
+    if not os.path.exists(KEY_PATH):
+        with open(KEY_PATH, "w", encoding="utf-8") as f:
+            f.write(secrets.token_urlsafe(16))
+    with open(KEY_PATH, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def valid_key(headers, query) -> bool:
+    auth = headers.get("authorization", "")
+    given = auth[len("Bearer "):] if auth.startswith("Bearer ") else query.get("key")
+    return given is not None and hmac.compare_digest(given.encode(), KEY.encode())
+
+
+async def require_key(request: Request) -> None:
+    if not valid_key(request.headers, request.query_params):
+        raise HTTPException(status_code=401, detail="chave inválida")
+
+
 conn = db()
 conn.executescript(SCHEMA)
 conn.close()
+
+KEY = load_key()
+print(f"capivara: chave {KEY}", flush=True)
 
 app = FastAPI(title="capivara")
 connections: dict[str, WebSocket] = {}
@@ -67,7 +92,7 @@ class Notify(BaseModel):
     sender_look: Any = None
 
 
-@app.post("/notify", status_code=201)
+@app.post("/notify", status_code=201, dependencies=[Depends(require_key)])
 async def notify(msg: Notify):
     conn = db()
     with conn:
@@ -106,7 +131,7 @@ async def notify(msg: Notify):
     return {"id": message_id, "unknown": unknown}
 
 
-@app.get("/clients")
+@app.get("/clients", dependencies=[Depends(require_key)])
 async def list_clients():
     conn = db()
     rows = conn.execute("SELECT id, name FROM clients ORDER BY name").fetchall()
@@ -114,7 +139,7 @@ async def list_clients():
     return [{"id": r["id"], "name": r["name"], "online": r["id"] in connections} for r in rows]
 
 
-@app.get("/history")
+@app.get("/history", dependencies=[Depends(require_key)])
 async def history(id: str):
     conn = db()
     rows = conn.execute(
@@ -136,6 +161,9 @@ async def history(id: str):
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket, id: str, name: str):
+    if not valid_key(ws.headers, ws.query_params):
+        await ws.close(code=1008)
+        return
     await ws.accept()
 
     old = connections.get(id)

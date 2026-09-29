@@ -4,6 +4,7 @@ import socket
 import sys
 import tomllib
 import uuid
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ class Config:
     name: str
     edge: str
     client_id: str
+    key: str = ""
 
     @property
     def ws_url(self) -> str:
@@ -63,14 +65,23 @@ def load() -> Config:
         name=data.get("name", socket.gethostname()),
         edge=edge,
         client_id=client_id,
+        key=data.get("key", ""),
     )
 
 
-def save_edge(edge: str) -> None:
+def save(**values: str) -> None:
     config_file = config_dir() / "config.toml"
     text = config_file.read_text(encoding="utf-8")
-    line = f'edge = "{edge}"   # bottom | left | right'
-    text, count = re.subn(r"(?m)^edge\s*=.*$", line, text)
-    if count == 0:
-        text = text.rstrip("\n") + "\n" + line + "\n"
+    for name, value in values.items():
+        line = f'{name} = "{value}"'
+        text, count = re.subn(rf'(?m)^{name}\s*=\s*"[^"]*"', line, text)
+        if count == 0:
+            text = text.rstrip("\n") + "\n" + line + "\n"
     config_file.write_text(text, encoding="utf-8")
+
+
+def parse_invite(text: str) -> tuple[str, str] | None:
+    parts = urlsplit(text.strip())
+    if parts.scheme != "capi" or not parts.netloc or not parts.fragment:
+        return None
+    return f"http://{parts.netloc}", parts.fragment
