@@ -37,6 +37,10 @@ class Capivara:
         if self.state == State.PEEKING:
             self.state = State.HIDDEN
 
+    def send_off(self) -> None:
+        if self.state == State.PEEKING:
+            self.state = State.LEAVING
+
     def click(self) -> None:
         if self.state == State.WAITING and self.pile:
             self.state = State.READING

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QTextBrowser,
     QToolButton,
@@ -79,6 +80,17 @@ CLOCK = (
     "X.......X",
     ".X.....X.",
     "..XXXXX..",
+)
+ENVELOPE = (
+    ".........",
+    "XXXXXXXXX",
+    "XX.....XX",
+    "X.X...X.X",
+    "X..X.X..X",
+    "X...X...X",
+    "X.......X",
+    "X.......X",
+    "XXXXXXXXX",
 )
 CROSS = (
     "XX.....XX",
@@ -179,6 +191,9 @@ class Balloon(QWidget):
             f"QPushButton:hover {{ color: {ACCENT}; }}"
             f"QPushButton#ip {{ color: {MUTED}; font-weight: normal; }}"
             f"QPushButton#ip:hover {{ color: {ACCENT}; }}"
+            f"QPushButton#person {{ font-weight: normal; text-align: left; padding: {PX}px {2 * PX}px; }}"
+            f"QPushButton#person:checked {{ background: #ecd29a; font-weight: bold; }}"
+            f"QPlainTextEdit {{ color: {INK}; background: #fffaf0; border: {PX // 2}px solid {INK}; padding: {PX}px; }}"
             f"QToolButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: {PX}px; }}"
             f"QToolButton:hover {{ background: #f3e2b8; }}"
             f"QToolButton:checked {{ background: #ecd29a; }}"
@@ -260,7 +275,7 @@ class Note(Balloon):
 
 
 class Menu(Balloon):
-    def __init__(self, on_config, on_history, on_closed):
+    def __init__(self, on_send, on_config, on_history, on_closed):
         super().__init__(Qt.Popup)
         self.on_closed = on_closed
         self.status_label = QLabel()
@@ -279,6 +294,7 @@ class Menu(Balloon):
         header.addWidget(self.ip_button)
         row = QHBoxLayout()
         for icon, text, action in (
+            (ENVELOPE, "ENVIAR", on_send),
             (GEAR, "CONFIG", on_config),
             (CLOCK, "HISTÓRICO", on_history),
             (CROSS, "SAIR", QApplication.quit),
@@ -305,6 +321,72 @@ class Menu(Balloon):
 
     def hideEvent(self, event) -> None:
         self.on_closed()
+
+
+class Composer(Balloon):
+    def __init__(self, on_send, on_done):
+        super().__init__()
+        self.setFixedWidth(320)
+        self.on_send = on_send
+        title = QLabel("ENVIAR")
+        bold = title.font()
+        bold.setBold(True)
+        title.setFont(bold)
+        self.people = QVBoxLayout()
+        self.people.setSpacing(0)
+        self.empty = QLabel("ninguém online")
+        self.text = QPlainTextEdit()
+        self.text.setPlaceholderText("escreva aqui…")
+        self.text.setFixedHeight(90)
+        back = QPushButton("◀ VOLTAR")
+        back.clicked.connect(on_done)
+        self.send_button = QPushButton("▶ ENVIAR")
+        self.send_button.clicked.connect(self.send)
+        buttons = QHBoxLayout()
+        buttons.addWidget(back)
+        buttons.addStretch()
+        buttons.addWidget(self.send_button)
+        self.box.addWidget(title)
+        self.box.addWidget(QLabel("PARA", objectName="muted"))
+        self.box.addLayout(self.people)
+        self.box.addWidget(self.empty)
+        self.box.addSpacing(2 * PX)
+        self.box.addWidget(self.text)
+        self.box.addLayout(buttons)
+
+    def person_buttons(self) -> list[QPushButton]:
+        return [self.people.itemAt(i).widget() for i in range(self.people.count())]
+
+    def show_people(self, people: list[dict], anchor: QRect) -> None:
+        for button in self.person_buttons():
+            button.deleteLater()
+        while self.people.count():
+            self.people.takeAt(0)
+        for person in people:
+            button = QPushButton(f"□ {person['name']}", objectName="person", checkable=True)
+            button.toggled.connect(lambda on, b=button, n=person["name"]: b.setText(f"{'■' if on else '□'} {n}"))
+            button.setProperty("cid", person["id"])
+            button.setChecked(len(people) == 1)
+            self.people.addWidget(button)
+        self.empty.setVisible(not people)
+        self.text.clear()
+        self.send_button.setText("▶ ENVIAR")
+        self.show_at(anchor)
+        self.activateWindow()
+        self.text.setFocus()
+
+    def send(self) -> None:
+        ids = [b.property("cid") for b in self.person_buttons() if b.isChecked()]
+        text = self.text.toPlainText().strip()
+        if not ids or not text:
+            self.flash("escolha alguém" if not ids else "escreva algo")
+            return
+        self.send_button.setText("enviando…")
+        self.on_send(ids, text)
+
+    def flash(self, text: str) -> None:
+        self.send_button.setText(text)
+        QTimer.singleShot(1500, lambda: self.send_button.setText("▶ ENVIAR"))
 
 
 class Settings(Balloon):
@@ -421,7 +503,8 @@ class Window(QWidget):
         self.note = Note(self.on_note_done)
         self.history = History(self.on_history_done)
         self.settings = Settings(self.set_edge, self.use_invite, self.show_menu)
-        self.menu = Menu(self.show_settings, self.load_history, self.on_menu_closed)
+        self.composer = Composer(self.post_message, self.show_menu)
+        self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
         self.ws = QWebSocket()
@@ -623,7 +706,7 @@ class Window(QWidget):
         self.update_mask()
 
     def leaveEvent(self, event) -> None:
-        if not any(b.isVisible() for b in (self.history, self.menu, self.settings)):
+        if not any(b.isVisible() for b in (self.history, self.menu, self.settings, self.composer)):
             self.capivara.hover_out()
 
     def mousePressEvent(self, event) -> None:
@@ -648,6 +731,7 @@ class Window(QWidget):
     def show_menu(self) -> None:
         self.history.hide()
         self.settings.hide()
+        self.composer.hide()
         self.menu.show_menu(self.cfg.name, self.connected, local_ip(), self.anchor())
 
     def show_settings(self) -> None:
@@ -720,6 +804,48 @@ class Window(QWidget):
             self.reveal = 0.0
         self.update_mask()
         self.update()
+
+    def api(self, path: str) -> QNetworkRequest:
+        request = QNetworkRequest(QUrl(self.cfg.server.rstrip("/") + path))
+        request.setRawHeader(b"Authorization", f"Bearer {self.cfg.key}".encode())
+        return request
+
+    def load_clients(self) -> None:
+        self.capivara.hover_in()
+        self.update_mask()
+        reply = self.http.get(self.api("/clients"))
+        reply.finished.connect(lambda: self.on_clients(reply))
+
+    def on_clients(self, reply: QNetworkReply) -> None:
+        people = []
+        if reply.error() == QNetworkReply.NoError:
+            people = [
+                c for c in json.loads(bytes(reply.readAll()))
+                if c["online"] and c["id"] != self.cfg.client_id
+            ]
+        self.composer.show_people(people, self.anchor())
+        reply.deleteLater()
+
+    def send_off(self) -> None:
+        self.composer.hide()
+        self.capivara.send_off()
+        self.reveal = 1.0
+        self.update_mask()
+        self.update()
+
+    def post_message(self, ids: list[str], text: str) -> None:
+        request = self.api("/notify")
+        request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
+        body = json.dumps({"text": text, "sender": self.cfg.name, "to": ids}).encode()
+        reply = self.http.post(request, body)
+        reply.finished.connect(lambda: self.on_posted(reply))
+
+    def on_posted(self, reply: QNetworkReply) -> None:
+        if reply.error() == QNetworkReply.NoError:
+            self.send_off()
+        else:
+            self.composer.flash("erro ao enviar")
+        reply.deleteLater()
 
     def load_history(self) -> None:
         self.capivara.hover_in()
