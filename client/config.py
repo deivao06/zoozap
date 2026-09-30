@@ -34,7 +34,7 @@ def config_dir() -> Path:
         root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:
         root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return root / "capivara"
+    return root / "zoozap"
 
 
 def load() -> Config:
@@ -82,6 +82,6 @@ def save(**values: str) -> None:
 
 def parse_invite(text: str) -> tuple[str, str] | None:
     parts = urlsplit(text.strip())
-    if parts.scheme != "capi" or not parts.netloc or not parts.fragment:
+    if parts.scheme != "zoo" or not parts.netloc or not parts.fragment:
         return None
     return f"http://{parts.netloc}", parts.fragment

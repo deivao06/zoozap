@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-DB_PATH = os.environ.get("CAPIVARA_DB", "capivara.db")
+DB_PATH = os.environ.get("ZOOZAP_DB", "zoozap.db")
 KEY_PATH = os.path.join(os.path.dirname(DB_PATH) or ".", "key")
 
 SCHEMA = """
@@ -78,9 +78,9 @@ conn.executescript(SCHEMA)
 conn.close()
 
 KEY = load_key()
-print(f"capivara: chave {KEY}", flush=True)
+print(f"zoozap: chave {KEY}", flush=True)
 
-app = FastAPI(title="capivara")
+app = FastAPI(title="zoozap")
 connections: dict[str, WebSocket] = {}
 
 

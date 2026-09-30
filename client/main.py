@@ -868,7 +868,7 @@ class Window(QWidget):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setApplicationName("capivara")
+    app.setApplicationName("zoozap")
     app.setQuitOnLastWindowClosed(False)
     window = Window(config.load())
     window.show()

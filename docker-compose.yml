@@ -4,8 +4,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - capivara-data:/data
+      - zoozap-data:/data
     restart: unless-stopped
 
 volumes:
-  capivara-data:
+  zoozap-data:
