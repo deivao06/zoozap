@@ -1,0 +1,47 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: zoozap-linux
+          - os: windows-latest
+            asset: zoozap-windows.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt "pyinstaller>=6"
+      - run: pyinstaller --onefile --windowed --name zoozap --add-data "assets:assets" main.py
+      - shell: bash
+        run: mv dist/zoozap* "dist/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: client/dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
