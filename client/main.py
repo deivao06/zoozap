@@ -489,21 +489,36 @@ class Settings(Balloon):
 
 
 class History(Balloon):
-    def __init__(self, on_done):
+    def __init__(self, on_done, on_clear):
         super().__init__()
+        self.on_clear = on_clear
         self.setFixedWidth(340)
         title = QLabel("HISTÓRICO")
         bold = title.font()
         bold.setBold(True)
         title.setFont(bold)
         self.browser = QTextBrowser()
+        self.clear_button = QPushButton("LIMPAR")
+        self.clear_button.clicked.connect(self.clear)
         button = QPushButton("◀ VOLTAR")
         button.clicked.connect(on_done)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.clear_button)
+        buttons.addWidget(button)
         self.box.addWidget(title)
         self.box.addWidget(self.browser)
-        self.box.addWidget(button, alignment=Qt.AlignRight)
+        self.box.addLayout(buttons)
+
+    def clear(self) -> None:
+        if self.clear_button.text() == "LIMPAR":
+            self.clear_button.setText("limpar mesmo?")
+            return
+        self.clear_button.setText("limpando…")
+        self.on_clear()
 
     def show_html(self, body: str, anchor: QRect) -> None:
+        self.clear_button.setText("LIMPAR")
         self.browser.setHtml(body)
         doc = self.browser.document()
         doc.setDocumentMargin(0)
@@ -552,7 +567,7 @@ class Window(QWidget):
         self.place()
 
         self.note = Note(self.on_note_done)
-        self.history = History(self.on_history_done)
+        self.history = History(self.on_history_done, self.clear_history)
         self.settings = Settings(self.set_edge, self.use_name, self.use_invite, self.show_menu)
         self.composer = Composer(self.post_message, self.show_menu)
         self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.toggle_sleep, self.on_menu_closed)
@@ -964,6 +979,17 @@ class Window(QWidget):
             self.history.show_items(json.loads(bytes(reply.readAll())), self.anchor())
         else:
             self.history.show_html("<p><i>Não consegui falar com o servidor.</i></p>", self.anchor())
+        reply.deleteLater()
+
+    def clear_history(self) -> None:
+        reply = self.http.deleteResource(self.api(f"/history?id={self.cfg.client_id}"))
+        reply.finished.connect(lambda: self.on_history_cleared(reply))
+
+    def on_history_cleared(self, reply: QNetworkReply) -> None:
+        if reply.error() == QNetworkReply.NoError:
+            self.history.show_items([], self.anchor())
+        else:
+            self.history.clear_button.setText("erro ao limpar")
         reply.deleteLater()
 
 

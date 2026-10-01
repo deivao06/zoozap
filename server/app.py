@@ -75,6 +75,8 @@ async def require_key(request: Request) -> None:
 
 conn = db()
 conn.executescript(SCHEMA)
+if "history_cleared_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(clients)")}:
+    conn.execute("ALTER TABLE clients ADD COLUMN history_cleared_at TEXT")
 conn.close()
 
 KEY = load_key()
@@ -147,7 +149,8 @@ async def history(id: str):
         """
         SELECT m.*, d.read_at FROM messages m
         JOIN deliveries d ON d.message_id = m.id
-        WHERE d.client_id = ? AND d.read_at IS NOT NULL
+        JOIN clients c ON c.id = d.client_id
+        WHERE d.client_id = ? AND d.read_at > COALESCE(c.history_cleared_at, '')
         ORDER BY d.read_at DESC
         LIMIT 50
         """,
@@ -158,6 +161,14 @@ async def history(id: str):
         {"id": r["id"], "sender": r["sender"], "title": r["title"], "text": r["text"], "read_at": r["read_at"]}
         for r in rows
     ]
+
+
+@app.delete("/history", status_code=204, dependencies=[Depends(require_key)])
+async def clear_history(id: str):
+    conn = db()
+    with conn:
+        conn.execute("UPDATE clients SET history_cleared_at = ? WHERE id = ?", (now(), id))
+    conn.close()
 
 
 @app.websocket("/ws")
