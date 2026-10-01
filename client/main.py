@@ -45,6 +45,8 @@ BUBBLE_PX = 3
 BUBBLE_BIG = (".XXX.", "X..OX", "X...X", "X...X", ".XXX.")
 BUBBLE_SMALL = (".X.", "X.X", ".X.")
 BUBBLE_POP = ("X.X", "...", "X.X")
+Z_BIG = ("XXXXX", "...X.", "..X..", ".X...", "XXXXX")
+Z_SMALL = ("XXXX", "..X.", ".X..", "XXXX")
 BUBBLE_INK = QColor(210, 240, 255, 220)
 BUBBLE_SHINE = QColor(255, 255, 255)
 SNORE = (
@@ -611,7 +613,7 @@ class Window(QWidget):
             age = self.clock - birth
             if not 0 <= age < BUBBLE_LIFE:
                 continue
-            if age >= BUBBLE_LIFE - 4:
+            if age >= BUBBLE_LIFE - 4 and rows not in (Z_BIG, Z_SMALL):
                 rows = BUBBLE_POP
             size = len(rows) * BUBBLE_PX
             d = 4 + BUBBLE_RISE * age // BUBBLE_LIFE
@@ -726,7 +728,7 @@ class Window(QWidget):
                 strip = self.strip_rect()
                 span = strip.width() if self.cfg.edge == "bottom" else strip.height()
                 self.bubbles = [
-                    (self.clock + i * BUBBLE_GAP, random.randint(6, span - 12), random.choice((BUBBLE_BIG, BUBBLE_SMALL)))
+                    (self.clock + i * BUBBLE_GAP, random.randint(6, span - 12), random.choice((Z_BIG, Z_SMALL) if self.capivara.asleep else (BUBBLE_BIG, BUBBLE_SMALL)))
                     for i in range(3)
                 ]
             if self.bubbles:
