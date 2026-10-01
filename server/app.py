@@ -77,6 +77,8 @@ conn = db()
 conn.executescript(SCHEMA)
 if "history_cleared_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(clients)")}:
     conn.execute("ALTER TABLE clients ADD COLUMN history_cleared_at TEXT")
+if "sender_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}:
+    conn.execute("ALTER TABLE messages ADD COLUMN sender_id TEXT")
 conn.close()
 
 KEY = load_key()
@@ -91,6 +93,7 @@ class Notify(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     title: str | None = None
     sender: str | None = None
+    sender_id: str | None = None
     to: list[str] | None = None
     sender_look: Any = None
 
@@ -111,8 +114,8 @@ async def notify(msg: Notify):
                     unknown.append(t)
                 targets |= matched
         cur = conn.execute(
-            "INSERT INTO messages (sender, title, text, created_at) VALUES (?, ?, ?, ?)",
-            (msg.sender, msg.title, msg.text, now()),
+            "INSERT INTO messages (sender, sender_id, title, text, created_at) VALUES (?, ?, ?, ?, ?)",
+            (msg.sender, msg.sender_id, msg.title, msg.text, now()),
         )
         message_id = cur.lastrowid
         conn.executemany(
@@ -147,18 +150,30 @@ async def history(id: str):
     conn = db()
     rows = conn.execute(
         """
-        SELECT m.*, d.read_at FROM messages m
+        SELECT m.*, d.read_at, d.read_at AS at, 0 AS sent, NULL AS to_names FROM messages m
         JOIN deliveries d ON d.message_id = m.id
         JOIN clients c ON c.id = d.client_id
         WHERE d.client_id = ? AND d.read_at > COALESCE(c.history_cleared_at, '')
-        ORDER BY d.read_at DESC
+        AND m.sender_id IS NOT d.client_id
+        UNION ALL
+        SELECT m.*, NULL, m.created_at, 1, (
+            SELECT json_group_array(t.name) FROM deliveries td
+            JOIN clients t ON t.id = td.client_id
+            WHERE td.message_id = m.id
+        ) FROM messages m
+        JOIN clients c ON c.id = m.sender_id
+        WHERE m.sender_id = ? AND m.created_at > COALESCE(c.history_cleared_at, '')
+        ORDER BY at DESC
         LIMIT 50
         """,
-        (id,),
+        (id, id),
     ).fetchall()
     conn.close()
     return [
-        {"id": r["id"], "sender": r["sender"], "title": r["title"], "text": r["text"], "read_at": r["read_at"]}
+        {
+            "id": r["id"], "sender": r["sender"], "title": r["title"], "text": r["text"], "read_at": r["read_at"],
+            "created_at": r["created_at"], "sent": bool(r["sent"]), "to": json.loads(r["to_names"] or "[]"),
+        }
         for r in rows
     ]
 

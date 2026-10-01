@@ -532,8 +532,9 @@ class History(Balloon):
             return
         parts = []
         for m in items:
-            head = " · ".join(html.escape(v) for v in (m.get("sender"), m.get("title")) if v)
-            when = html.escape((m.get("read_at") or "")[:16].replace("T", " "))
+            who = "→ para " + ", ".join(m["to"]) if m.get("sent") else m.get("sender")
+            head = " · ".join(html.escape(v) for v in (who, m.get("title")) if v)
+            when = html.escape((m.get("read_at") or m.get("created_at") or "")[:16].replace("T", " "))
             parts.append(
                 f"<p style='margin-bottom:10px'><span style='color:{MUTED}'>{when} {head}</span><br>{html.escape(m['text'])}</p>"
             )
@@ -952,7 +953,7 @@ class Window(QWidget):
     def post_message(self, ids: list[str], text: str) -> None:
         request = self.api("/notify")
         request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
-        body = json.dumps({"text": text, "sender": self.cfg.name, "to": ids}).encode()
+        body = json.dumps({"text": text, "sender": self.cfg.name, "sender_id": self.cfg.client_id, "to": ids}).encode()
         reply = self.http.post(request, body)
         reply.finished.connect(lambda: self.on_posted(reply))
 
