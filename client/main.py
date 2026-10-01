@@ -825,6 +825,7 @@ class Window(QWidget):
 
     def toggle_sleep(self) -> None:
         self.capivara.toggle_sleep()
+        self.release()
         self.update_mask()
         self.update()
 
