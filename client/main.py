@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QTextBrowser,
@@ -213,7 +214,7 @@ class Balloon(QWidget):
             f"QPushButton#ip:hover {{ color: {ACCENT}; }}"
             f"QPushButton#person {{ font-weight: normal; text-align: left; padding: {PX}px {2 * PX}px; }}"
             f"QPushButton#person:checked {{ background: #ecd29a; font-weight: bold; }}"
-            f"QPlainTextEdit {{ color: {INK}; background: #fffaf0; border: {PX // 2}px solid {INK}; padding: {PX}px; }}"
+            f"QPlainTextEdit, QLineEdit {{ color: {INK}; background: #fffaf0; border: {PX // 2}px solid {INK}; padding: {PX}px; }}"
             f"QToolButton {{ color: {INK}; background: transparent; border: none; font-weight: bold; padding: {PX}px; }}"
             f"QToolButton:hover {{ background: #f3e2b8; }}"
             f"QToolButton:checked {{ background: #ecd29a; }}"
@@ -429,7 +430,7 @@ class Composer(Balloon):
 
 
 class Settings(Balloon):
-    def __init__(self, on_edge, on_invite, on_done):
+    def __init__(self, on_edge, on_name, on_invite, on_done):
         super().__init__()
         title = QLabel("CONFIG")
         bold = title.font()
@@ -447,6 +448,9 @@ class Settings(Balloon):
             button.clicked.connect(lambda _=False, e=edge: on_edge(e))
             row.addWidget(button)
             self.edge_buttons[edge] = button
+        self.on_name = on_name
+        self.name_edit = QLineEdit()
+        self.name_edit.returnPressed.connect(self.save_name)
         self.on_invite = on_invite
         self.server_label = QLabel()
         self.invite_button = QPushButton("▶ COLAR CONVITE")
@@ -456,6 +460,9 @@ class Settings(Balloon):
         self.box.addWidget(title)
         self.box.addWidget(QLabel("BORDA", objectName="muted"))
         self.box.addLayout(row)
+        self.box.addSpacing(2 * PX)
+        self.box.addWidget(QLabel("NOME", objectName="muted"))
+        self.box.addWidget(self.name_edit)
         self.box.addSpacing(2 * PX)
         self.box.addWidget(QLabel("SERVIDOR", objectName="muted"))
         self.box.addWidget(self.server_label)
@@ -467,6 +474,11 @@ class Settings(Balloon):
             button.setChecked(e == edge)
         self.server_label.setText(server)
         self.show_at(anchor)
+        self.activateWindow()
+
+    def save_name(self) -> None:
+        self.name_edit.setText(self.on_name(self.name_edit.text()))
+        self.name_edit.clearFocus()
 
     def paste_invite(self) -> None:
         server = self.on_invite(QGuiApplication.clipboard().text())
@@ -541,7 +553,7 @@ class Window(QWidget):
 
         self.note = Note(self.on_note_done)
         self.history = History(self.on_history_done)
-        self.settings = Settings(self.set_edge, self.use_invite, self.show_menu)
+        self.settings = Settings(self.set_edge, self.use_name, self.use_invite, self.show_menu)
         self.composer = Composer(self.post_message, self.show_menu)
         self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.toggle_sleep, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
@@ -793,6 +805,7 @@ class Window(QWidget):
     def show_settings(self) -> None:
         self.capivara.hover_in()
         self.update_mask()
+        self.settings.name_edit.setText(self.cfg.name)
         self.settings.show_settings(self.cfg.edge, self.cfg.server, self.anchor())
 
     def use_invite(self, text: str) -> str:
@@ -801,11 +814,22 @@ class Window(QWidget):
             return ""
         self.cfg.server, self.cfg.key = invite
         config.save(server=self.cfg.server, key=self.cfg.key)
+        self.reconnect()
+        return self.cfg.server
+
+    def use_name(self, text: str) -> str:
+        name = text.replace('"', "").replace("\\", "").strip()
+        if name and name != self.cfg.name:
+            self.cfg.name = name
+            config.save(name=name)
+            self.reconnect()
+        return self.cfg.name
+
+    def reconnect(self) -> None:
         self.backoff = 1
         self.ws.close()
         if self.reconnect_timer.isActive():
             self.reconnect_timer.start(0)
-        return self.cfg.server
 
     def set_edge(self, edge: str) -> None:
         self.settings.show_settings(self.cfg.edge, self.cfg.server, self.anchor())
