@@ -82,6 +82,7 @@ print(f"zoozap: chave {KEY}", flush=True)
 
 app = FastAPI(title="zoozap")
 connections: dict[str, WebSocket] = {}
+sleeping: set[str] = set()
 
 
 class Notify(BaseModel):
@@ -136,7 +137,7 @@ async def list_clients():
     conn = db()
     rows = conn.execute("SELECT id, name FROM clients ORDER BY name").fetchall()
     conn.close()
-    return [{"id": r["id"], "name": r["name"], "online": r["id"] in connections} for r in rows]
+    return [{"id": r["id"], "name": r["name"], "online": r["id"] in connections, "asleep": r["id"] in sleeping} for r in rows]
 
 
 @app.get("/history", dependencies=[Depends(require_key)])
@@ -202,6 +203,12 @@ async def ws_endpoint(ws: WebSocket, id: str, name: str):
             raw = await ws.receive_text()
             try:
                 data = json.loads(raw)
+                if data.get("type") == "sleep":
+                    if data.get("asleep"):
+                        sleeping.add(id)
+                    else:
+                        sleeping.discard(id)
+                    continue
                 if data.get("type") != "read":
                     continue
                 message_id = int(data["id"])
@@ -219,6 +226,7 @@ async def ws_endpoint(ws: WebSocket, id: str, name: str):
     finally:
         if connections.get(id) is ws:
             del connections[id]
+            sleeping.discard(id)
             conn = db()
             with conn:
                 conn.execute("UPDATE clients SET last_seen = ? WHERE id = ?", (now(), id))

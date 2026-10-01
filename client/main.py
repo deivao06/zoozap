@@ -359,6 +359,7 @@ class Composer(Balloon):
         super().__init__()
         self.setFixedWidth(320)
         self.on_send = on_send
+        self.confirming = False
         title = QLabel("ENVIAR")
         bold = title.font()
         bold.setBold(True)
@@ -394,14 +395,17 @@ class Composer(Balloon):
         while self.people.count():
             self.people.takeAt(0)
         for person in people:
-            button = QPushButton(f"□ {person['name']}", objectName="person", checkable=True)
-            button.toggled.connect(lambda on, b=button, n=person["name"]: b.setText(f"{'■' if on else '□'} {n}"))
+            name = person["name"] + (" zz" if person.get("asleep") else "")
+            button = QPushButton(f"□ {name}", objectName="person", checkable=True)
+            button.toggled.connect(lambda on, b=button, n=name: b.setText(f"{'■' if on else '□'} {n}"))
             button.setProperty("cid", person["id"])
+            button.setProperty("asleep", bool(person.get("asleep")))
             button.setChecked(len(people) == 1)
             self.people.addWidget(button)
         self.empty.setVisible(not people)
         self.text.clear()
         self.send_button.setText("▶ ENVIAR")
+        self.confirming = False
         self.show_at(anchor)
         self.activateWindow()
         self.text.setFocus()
@@ -411,6 +415,10 @@ class Composer(Balloon):
         text = self.text.toPlainText().strip()
         if not ids or not text:
             self.flash("escolha alguém" if not ids else "escreva algo")
+            return
+        if not self.confirming and any(b.property("asleep") for b in self.person_buttons() if b.isChecked()):
+            self.confirming = True
+            self.send_button.setText("dormindo! enviar mesmo?")
             return
         self.send_button.setText("enviando…")
         self.on_send(ids, text)
@@ -825,6 +833,7 @@ class Window(QWidget):
 
     def toggle_sleep(self) -> None:
         self.capivara.toggle_sleep()
+        self.send_sleep()
         self.release()
         self.update_mask()
         self.update()
@@ -847,6 +856,11 @@ class Window(QWidget):
     def on_connected(self) -> None:
         self.connected = True
         self.backoff = 1
+        self.send_sleep()
+
+    def send_sleep(self) -> None:
+        if self.connected:
+            self.ws.sendTextMessage(json.dumps({"type": "sleep", "asleep": self.capivara.asleep}))
 
     def on_disconnected(self) -> None:
         self.connected = False
