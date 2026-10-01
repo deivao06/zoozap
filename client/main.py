@@ -278,6 +278,7 @@ class Menu(Balloon):
     def __init__(self, on_send, on_config, on_history, on_closed):
         super().__init__(Qt.Popup)
         self.on_closed = on_closed
+        self.picked = False
         self.status_label = QLabel()
         bold = self.status_label.font()
         bold.setBold(True)
@@ -300,13 +301,14 @@ class Menu(Balloon):
             (CROSS, "SAIR", QApplication.quit),
         ):
             button = icon_button(icon, text)
-            button.clicked.connect(lambda _=False, a=action: (self.hide(), a()))
+            button.clicked.connect(lambda _=False, a=action: self.pick(a))
             row.addWidget(button)
         self.box.addLayout(header)
         self.box.addSpacing(3 * PX)
         self.box.addLayout(row)
 
     def show_menu(self, name: str, connected: bool, ip: str, anchor: QRect) -> None:
+        self.picked = False
         self.dot.setPixmap(pixel_pixmap(DOT, ONLINE if connected else OFFLINE, 2))
         self.status_label.setText(name if connected else "desconectado")
         self.ip = ip
@@ -319,8 +321,13 @@ class Menu(Balloon):
         self.ip_button.setText("copiado!")
         QTimer.singleShot(1000, lambda: self.ip_button.setText(self.ip))
 
+    def pick(self, action) -> None:
+        self.picked = True
+        self.hide()
+        action()
+
     def hideEvent(self, event) -> None:
-        self.on_closed()
+        self.on_closed(self.picked)
 
 
 class Composer(Balloon):
@@ -732,6 +739,7 @@ class Window(QWidget):
         self.history.hide()
         self.settings.hide()
         self.composer.hide()
+        self.capivara.hold()
         self.menu.show_menu(self.cfg.name, self.connected, local_ip(), self.anchor())
 
     def show_settings(self) -> None:
@@ -767,11 +775,19 @@ class Window(QWidget):
     def on_history_done(self) -> None:
         self.show_menu()
 
-    def on_menu_closed(self) -> None:
+    def on_menu_closed(self, picked: bool) -> None:
         if not self.underMouse() and not self.history.isVisible():
             self.capivara.hover_out()
+        if not picked:
+            self.release()
         self.update_mask()
         self.update()
+
+    def release(self) -> None:
+        was_peeking = self.peeking()
+        self.capivara.release()
+        if was_peeking and not self.peeking():
+            self.reveal = 0.0
 
     def open_socket(self) -> None:
         url = QUrl(self.cfg.ws_url + "/ws")
@@ -830,6 +846,7 @@ class Window(QWidget):
         self.composer.hide()
         self.capivara.send_off()
         self.reveal = 1.0
+        self.release()
         self.update_mask()
         self.update()
 
