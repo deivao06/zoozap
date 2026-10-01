@@ -635,7 +635,7 @@ class Window(QWidget):
 
     def pixmap(self):
         if self.peeking():
-            frames = self.pixmaps[f"peek_{self.cfg.edge}"]
+            frames = self.pixmaps[f"{'sleep' if self.capivara.asleep else 'peek'}_{self.cfg.edge}"]
             if self.capivara.state != State.PEEKING or self.reveal < 1:
                 return frames[0]
             return frames[self.ticks // sprite.PEEK_TICKS % sprite.FRAMES]

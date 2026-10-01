@@ -32,10 +32,10 @@ PEEK_W, PEEK_H = size("peek", PEEK_SCALE)
 
 
 def frames() -> dict[str, list[QPixmap]]:
-    peek = load("peek", PEEK_SCALE)
-    return {
-        "walk": load("walk", WALK_SCALE),
-        "peek_bottom": peek,
-        "peek_right": [p.transformed(QTransform().rotate(-90)) for p in peek],
-        "peek_left": [p.transformed(QTransform().rotate(90)) for p in peek],
-    }
+    out = {"walk": load("walk", WALK_SCALE)}
+    for name in ("peek", "sleep"):
+        pix = load(name, PEEK_SCALE)
+        out[f"{name}_bottom"] = pix
+        out[f"{name}_right"] = [p.transformed(QTransform().rotate(-90)) for p in pix]
+        out[f"{name}_left"] = [p.transformed(QTransform().rotate(90)) for p in pix]
+    return out
