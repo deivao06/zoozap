@@ -46,6 +46,15 @@ BUBBLE_SMALL = (".X.", "X.X", ".X.")
 BUBBLE_POP = ("X.X", "...", "X.X")
 BUBBLE_INK = QColor(210, 240, 255, 220)
 BUBBLE_SHINE = QColor(255, 255, 255)
+SNORE = (
+    ".....XXXX",
+    "........X",
+    ".......X.",
+    "XXX...X..",
+    "..X..XXXX",
+    ".X.......",
+    "XXX......",
+)
 REST = 30
 LIFT = 250
 PEEK_SINK = 8
@@ -91,6 +100,17 @@ ENVELOPE = (
     "X.......X",
     "X.......X",
     "XXXXXXXXX",
+)
+MOON = (
+    "...XXXX..",
+    ".XXX.....",
+    "XXX......",
+    "XX.......",
+    "XX.......",
+    "XX.......",
+    "XXX......",
+    ".XXX.....",
+    "...XXXX..",
 )
 CROSS = (
     "XX.....XX",
@@ -275,7 +295,7 @@ class Note(Balloon):
 
 
 class Menu(Balloon):
-    def __init__(self, on_send, on_config, on_history, on_closed):
+    def __init__(self, on_send, on_config, on_history, on_sleep, on_closed):
         super().__init__(Qt.Popup)
         self.on_closed = on_closed
         self.picked = False
@@ -298,17 +318,21 @@ class Menu(Balloon):
             (ENVELOPE, "ENVIAR", on_send),
             (GEAR, "CONFIG", on_config),
             (CLOCK, "HISTÓRICO", on_history),
+            (MOON, "DORMIR", on_sleep),
             (CROSS, "SAIR", QApplication.quit),
         ):
             button = icon_button(icon, text)
             button.clicked.connect(lambda _=False, a=action: self.pick(a))
             row.addWidget(button)
+            if action is on_sleep:
+                self.sleep_button = button
         self.box.addLayout(header)
         self.box.addSpacing(3 * PX)
         self.box.addLayout(row)
 
-    def show_menu(self, name: str, connected: bool, ip: str, anchor: QRect) -> None:
+    def show_menu(self, name: str, connected: bool, ip: str, asleep: bool, anchor: QRect) -> None:
         self.picked = False
+        self.sleep_button.setText("ACORDAR" if asleep else "DORMIR")
         self.dot.setPixmap(pixel_pixmap(DOT, ONLINE if connected else OFFLINE, 2))
         self.status_label.setText(name if connected else "desconectado")
         self.ip = ip
@@ -511,7 +535,7 @@ class Window(QWidget):
         self.history = History(self.on_history_done)
         self.settings = Settings(self.set_edge, self.use_invite, self.show_menu)
         self.composer = Composer(self.post_message, self.show_menu)
-        self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.on_menu_closed)
+        self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.toggle_sleep, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
         self.ws = QWebSocket()
@@ -624,6 +648,18 @@ class Window(QWidget):
         center = self.frame_transform().map(QPointF(*sprite.BADGE_POS))
         return QRect(int(center.x()) - 11, max(int(center.y()) - 11, 0), 22, 22)
 
+    def snore_rect(self) -> QRect:
+        r = self.capivara_rect()
+        w, h = len(SNORE[0]) * BUBBLE_PX, len(SNORE) * BUBBLE_PX
+        if self.cfg.edge == "bottom":
+            return QRect(r.center().x() + 10, r.top() - h, w, h)
+        if self.cfg.edge == "right":
+            return QRect(r.left() - w, r.top(), w, h)
+        return QRect(r.right() + 1, r.top(), w, h)
+
+    def snoring(self) -> bool:
+        return self.capivara.asleep and self.peeking() and self.reveal > 0
+
     def update_mask(self) -> None:
         region = QRegion(self.strip_rect())
         for rect, _ in self.bubble_rects():
@@ -632,6 +668,8 @@ class Window(QWidget):
             region = region.united(QRegion(self.capivara_rect()))
             if self.capivara.pile:
                 region = region.united(QRegion(self.badge_rect()))
+            if self.snoring():
+                region = region.united(QRegion(self.snore_rect()))
         self.setMask(region)
 
     def target(self) -> float:
@@ -699,6 +737,8 @@ class Window(QWidget):
         p.setTransform(self.frame_transform())
         p.drawPixmap(0, 0, self.pixmap())
         p.restore()
+        if self.snoring():
+            p.drawPixmap(self.snore_rect().topLeft(), pixel_pixmap(SNORE, BUBBLE_INK.name(), BUBBLE_PX))
         if self.capivara.pile:
             badge = self.badge_rect()
             p.setPen(Qt.NoPen)
@@ -740,7 +780,7 @@ class Window(QWidget):
         self.settings.hide()
         self.composer.hide()
         self.capivara.hold()
-        self.menu.show_menu(self.cfg.name, self.connected, local_ip(), self.anchor())
+        self.menu.show_menu(self.cfg.name, self.connected, local_ip(), self.capivara.asleep, self.anchor())
 
     def show_settings(self) -> None:
         self.capivara.hover_in()
@@ -780,6 +820,11 @@ class Window(QWidget):
             self.capivara.hover_out()
         if not picked:
             self.release()
+        self.update_mask()
+        self.update()
+
+    def toggle_sleep(self) -> None:
+        self.capivara.toggle_sleep()
         self.update_mask()
         self.update()
 

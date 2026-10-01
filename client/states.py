@@ -17,6 +17,7 @@ class Capivara:
         self.pile: deque[dict] = deque()
         self.seen: set[int] = set()
         self.held = False
+        self.asleep = False
 
     @property
     def current(self) -> dict | None:
@@ -27,7 +28,7 @@ class Capivara:
             return
         self.seen.add(msg["id"])
         self.pile.append(msg)
-        if not self.held and self.state in (State.HIDDEN, State.PEEKING, State.LEAVING):
+        if not self.held and not self.asleep and self.state in (State.HIDDEN, State.PEEKING, State.LEAVING):
             self.state = State.ENTERING
 
     def hold(self) -> None:
@@ -35,8 +36,12 @@ class Capivara:
 
     def release(self) -> None:
         self.held = False
-        if self.pile and self.state in (State.HIDDEN, State.PEEKING):
+        if self.pile and not self.asleep and self.state in (State.HIDDEN, State.PEEKING):
             self.state = State.ENTERING
+
+    def toggle_sleep(self) -> None:
+        self.asleep = not self.asleep
+        self.held = False
 
     def hover_in(self) -> None:
         if self.state == State.HIDDEN:
@@ -67,4 +72,4 @@ class Capivara:
 
     def gone(self) -> None:
         if self.state == State.LEAVING:
-            self.state = State.ENTERING if self.pile and not self.held else State.HIDDEN
+            self.state = State.ENTERING if self.pile and not self.held and not self.asleep else State.HIDDEN
