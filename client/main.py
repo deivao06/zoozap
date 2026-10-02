@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import re
 import socket
 import sys
 
@@ -10,7 +11,7 @@ if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap, QRegion, QTransform
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 from PySide6.QtWidgets import (
@@ -276,16 +277,24 @@ class Note(Balloon):
         bold = self.title_label.font()
         bold.setBold(True)
         self.title_label.setFont(bold)
-        self.text_label = QLabel()
-        for label in (self.sender_label, self.title_label, self.text_label):
+        for label in (self.sender_label, self.title_label):
             label.setWordWrap(True)
             label.setTextFormat(Qt.PlainText)
-        button = QPushButton("▶ LIDO")
-        button.clicked.connect(on_done)
+        self.text_view = QTextBrowser()
+        self.text_view.setOpenLinks(False)
+        self.text_view.anchorClicked.connect(self.open_link)
+        self.button = QPushButton("▶ LIDO")
+        self.button.clicked.connect(on_done)
         self.box.addWidget(self.sender_label)
         self.box.addWidget(self.title_label)
-        self.box.addWidget(self.text_label)
-        self.box.addWidget(button, alignment=Qt.AlignRight)
+        self.box.addWidget(self.text_view)
+        self.box.addWidget(self.button, alignment=Qt.AlignRight)
+
+    def open_link(self, url: QUrl) -> None:
+        if not QDesktopServices.openUrl(url):
+            QGuiApplication.clipboard().setText(url.toString())
+            self.button.setText("link copiado!")
+            QTimer.singleShot(1500, lambda: self.button.setText("▶ LIDO"))
 
     def show_message(self, msg: dict, anchor: QRect) -> None:
         sender, title = msg.get("sender"), msg.get("title")
@@ -293,7 +302,17 @@ class Note(Balloon):
         self.sender_label.setVisible(bool(sender))
         self.title_label.setText((title or "").upper())
         self.title_label.setVisible(bool(title))
-        self.text_label.setText(msg["text"])
+        body = re.sub(
+            r"https?://[^\s<>\"']*[^\s<>\"'.,;:!?)]",
+            lambda m: f"<a href='{html.unescape(m.group(0))}' style='color:{ACCENT}'>{m.group(0)}</a>",
+            html.escape(msg["text"], quote=False),
+        )
+        self.text_view.setHtml(f"<p style='white-space:pre-wrap'>{body}</p>")
+        doc = self.text_view.document()
+        doc.setDocumentMargin(0)
+        doc.setTextWidth(self.width() - 9 * PX)
+        self.text_view.setFixedHeight(min(int(doc.size().height()) + 4, 240))
+        self.text_view.verticalScrollBar().setValue(0)
         self.show_at(anchor)
 
 
