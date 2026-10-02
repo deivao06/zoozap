@@ -10,7 +10,7 @@ import sys
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
+from PySide6.QtCore import QPointF, QProcess, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 import config
 import sprite
+import updater
 from states import Capivara, State
 
 W = max(sprite.WALK_W + 160, sprite.PEEK_W + 60, sprite.PEEK_H + 60)
@@ -574,6 +575,29 @@ class History(Balloon):
         self.show_html("".join(parts), anchor)
 
 
+class Update(Balloon):
+    def __init__(self, on_update):
+        super().__init__()
+        self.label = QLabel()
+        bold = self.label.font()
+        bold.setBold(True)
+        self.label.setFont(bold)
+        later = QPushButton("DEPOIS")
+        later.clicked.connect(self.hide)
+        self.button = QPushButton("▶ ATUALIZAR")
+        self.button.clicked.connect(on_update)
+        buttons = QHBoxLayout()
+        buttons.addWidget(later)
+        buttons.addStretch()
+        buttons.addWidget(self.button)
+        self.box.addWidget(self.label)
+        self.box.addLayout(buttons)
+
+    def show_update(self, tag: str, anchor: QRect) -> None:
+        self.label.setText(f"Nova versão {tag}!")
+        self.show_at(anchor)
+
+
 class Window(QWidget):
     def __init__(self, cfg: config.Config):
         super().__init__(
@@ -607,6 +631,8 @@ class Window(QWidget):
         self.composer = Composer(self.post_message, self.on_composer_back)
         self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.toggle_sleep, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
+        self.update_balloon = Update(self.download_update)
+        self.update_url = ""
 
         self.ws = QWebSocket()
         self.ws.connected.connect(self.on_connected)
@@ -621,6 +647,9 @@ class Window(QWidget):
 
         self.update_mask()
         self.open_socket()
+        if updater.enabled():
+            updater.cleanup()
+            self.check_update()
 
     def edge_size(self) -> tuple[int, int]:
         return (W, H) if self.cfg.edge == "bottom" else (H, W + LIFT)
@@ -1060,6 +1089,52 @@ class Window(QWidget):
         else:
             self.history.clear_button.setText("erro ao limpar")
         reply.deleteLater()
+
+    def check_update(self) -> None:
+        request = QNetworkRequest(QUrl(updater.LATEST))
+        request.setHeader(QNetworkRequest.UserAgentHeader, "zoozap")
+        reply = self.http.get(request)
+        reply.finished.connect(lambda: self.on_latest(reply))
+
+    def on_latest(self, reply: QNetworkReply) -> None:
+        found = None
+        if reply.error() == QNetworkReply.NoError:
+            try:
+                found = updater.newer(json.loads(bytes(reply.readAll())))
+            except (ValueError, AttributeError, KeyError, TypeError):
+                pass
+        reply.deleteLater()
+        if found:
+            tag, self.update_url = found
+            self.update_balloon.show_update(tag, self.anchor())
+
+    def download_update(self) -> None:
+        button = self.update_balloon.button
+        if button.text() != "▶ ATUALIZAR":
+            return
+        button.setText("baixando 0%")
+        request = QNetworkRequest(QUrl(self.update_url))
+        request.setHeader(QNetworkRequest.UserAgentHeader, "zoozap")
+        reply = self.http.get(request)
+        reply.downloadProgress.connect(
+            lambda done, total: total > 0 and button.setText(f"baixando {done * 100 // total}%")
+        )
+        reply.finished.connect(lambda: self.on_downloaded(reply))
+
+    def on_downloaded(self, reply: QNetworkReply) -> None:
+        data = bytes(reply.readAll()) if reply.error() == QNetworkReply.NoError else b""
+        reply.deleteLater()
+        try:
+            if not data:
+                raise OSError
+            updater.install(data)
+        except OSError:
+            self.update_balloon.button.setText("erro ao atualizar")
+            QTimer.singleShot(2000, lambda: self.update_balloon.button.setText("▶ ATUALIZAR"))
+            return
+        os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        QProcess.startDetached(sys.executable, [])
+        QApplication.quit()
 
 
 def main() -> None:
