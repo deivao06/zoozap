@@ -49,6 +49,7 @@ def message_payload(row: sqlite3.Row) -> dict:
         "type": "message",
         "id": row["id"],
         "sender": row["sender"],
+        "sender_id": row["sender_id"],
         "title": row["title"],
         "text": row["text"],
     }

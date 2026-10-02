@@ -52,7 +52,7 @@ class Capivara:
             self.state = State.HIDDEN
 
     def send_off(self) -> None:
-        if self.state == State.PEEKING:
+        if self.state in (State.PEEKING, State.WAITING):
             self.state = State.LEAVING
 
     def click(self) -> None:
@@ -65,6 +65,16 @@ class Capivara:
         read = self.pile.popleft()
         self.state = State.WAITING if self.pile else State.LEAVING
         return read
+
+    def reply(self) -> dict | None:
+        if self.state != State.READING:
+            return None
+        self.state = State.WAITING
+        return self.pile.popleft()
+
+    def reply_done(self) -> None:
+        if self.state == State.WAITING and not self.pile:
+            self.state = State.LEAVING
 
     def arrived(self) -> None:
         if self.state == State.ENTERING:

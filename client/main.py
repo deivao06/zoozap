@@ -269,9 +269,10 @@ class Balloon(QWidget):
 
 
 class Note(Balloon):
-    def __init__(self, on_done):
+    def __init__(self, on_done, on_reply, me):
         super().__init__()
         self.setFixedWidth(300)
+        self.me = me
         self.sender_label = QLabel(objectName="muted")
         self.title_label = QLabel()
         bold = self.title_label.font()
@@ -285,10 +286,16 @@ class Note(Balloon):
         self.text_view.anchorClicked.connect(self.open_link)
         self.button = QPushButton("▶ LIDO")
         self.button.clicked.connect(on_done)
+        self.reply_button = QPushButton("↩ RESPONDER")
+        self.reply_button.clicked.connect(on_reply)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.reply_button)
+        buttons.addWidget(self.button)
         self.box.addWidget(self.sender_label)
         self.box.addWidget(self.title_label)
         self.box.addWidget(self.text_view)
-        self.box.addWidget(self.button, alignment=Qt.AlignRight)
+        self.box.addLayout(buttons)
 
     def open_link(self, url: QUrl) -> None:
         if not QDesktopServices.openUrl(url):
@@ -296,12 +303,17 @@ class Note(Balloon):
             self.button.setText("link copiado!")
             QTimer.singleShot(1500, lambda: self.button.setText("▶ LIDO"))
 
+    def flash_offline(self) -> None:
+        self.reply_button.setText("offline")
+        QTimer.singleShot(1500, lambda: self.reply_button.setText("↩ RESPONDER"))
+
     def show_message(self, msg: dict, anchor: QRect) -> None:
         sender, title = msg.get("sender"), msg.get("title")
         self.sender_label.setText(f"de {sender}" if sender else "")
         self.sender_label.setVisible(bool(sender))
         self.title_label.setText((title or "").upper())
         self.title_label.setVisible(bool(title))
+        self.reply_button.setVisible(bool(msg.get("sender_id")) and msg.get("sender_id") != self.me)
         body = re.sub(
             r"https?://[^\s<>\"']*[^\s<>\"'.,;:!?)]",
             lambda m: f"<a href='{html.unescape(m.group(0))}' style='color:{ACCENT}'>{m.group(0)}</a>",
@@ -582,16 +594,17 @@ class Window(QWidget):
         self.pixmaps = sprite.frames()
         self.connected = False
         self.backoff = 1
+        self.replying = False
 
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedSize(*self.edge_size())
         self.place()
 
-        self.note = Note(self.on_note_done)
+        self.note = Note(self.on_note_done, self.reply, cfg.client_id)
         self.history = History(self.on_history_done, self.clear_history)
         self.settings = Settings(self.set_edge, self.use_name, self.use_invite, self.show_menu)
-        self.composer = Composer(self.post_message, self.show_menu)
+        self.composer = Composer(self.post_message, self.on_composer_back)
         self.menu = Menu(self.load_clients, self.show_settings, self.load_history, self.toggle_sleep, self.on_menu_closed)
         self.http = QNetworkAccessManager(self)
 
@@ -832,6 +845,39 @@ class Window(QWidget):
         self.update_mask()
         self.update()
 
+    def reply(self) -> None:
+        msg = self.capivara.current
+        reply = self.http.get(self.api("/clients"))
+        reply.finished.connect(lambda: self.on_reply_clients(reply, msg))
+
+    def on_reply_clients(self, reply: QNetworkReply, msg: dict) -> None:
+        people = []
+        if reply.error() == QNetworkReply.NoError:
+            people = [c for c in json.loads(bytes(reply.readAll())) if c["online"] and c["id"] == msg.get("sender_id")]
+        reply.deleteLater()
+        if self.capivara.state != State.READING or self.capivara.current is not msg:
+            return
+        if not people:
+            self.note.flash_offline()
+            return
+        self.note.hide()
+        read = self.capivara.reply()
+        if self.connected:
+            self.ws.sendTextMessage(json.dumps({"type": "read", "id": read["id"]}))
+        self.replying = True
+        self.composer.show_people(people, self.anchor())
+        self.update_mask()
+        self.update()
+
+    def on_composer_back(self) -> None:
+        if not self.replying:
+            self.show_menu()
+            return
+        self.composer.hide()
+        self.capivara.reply_done()
+        self.update_mask()
+        self.update()
+
     def show_menu(self) -> None:
         self.history.hide()
         self.settings.hide()
@@ -960,6 +1006,7 @@ class Window(QWidget):
                 c for c in json.loads(bytes(reply.readAll()))
                 if c["online"] and c["id"] != self.cfg.client_id
             ]
+        self.replying = False
         self.composer.show_people(people, self.anchor())
         reply.deleteLater()
 
