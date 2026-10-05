@@ -425,7 +425,18 @@ class Composer(Balloon):
     def person_buttons(self) -> list[QPushButton]:
         return [self.people.itemAt(i).widget() for i in range(self.people.count())]
 
-    def show_people(self, people: list[dict], anchor: QRect) -> None:
+    def open(self, anchor: QRect) -> None:
+        self.set_people([])
+        self.empty.setText("carregando…")
+        self.text.clear()
+        self.send_button.setText("▶ ENVIAR")
+        self.confirming = False
+        self.where = anchor
+        self.show_at(anchor)
+        self.activateWindow()
+        self.text.setFocus()
+
+    def set_people(self, people: list[dict]) -> None:
         for button in self.person_buttons():
             button.deleteLater()
         while self.people.count():
@@ -438,13 +449,10 @@ class Composer(Balloon):
             button.setProperty("asleep", bool(person.get("asleep")))
             button.setChecked(len(people) == 1)
             self.people.addWidget(button)
+        self.empty.setText("ninguém online")
         self.empty.setVisible(not people)
-        self.text.clear()
-        self.send_button.setText("▶ ENVIAR")
-        self.confirming = False
-        self.show_at(anchor)
-        self.activateWindow()
-        self.text.setFocus()
+        if self.isVisible():
+            self.show_at(self.where)
 
     def send(self) -> None:
         ids = [b.property("cid") for b in self.person_buttons() if b.isChecked()]
@@ -890,6 +898,9 @@ class Window(QWidget):
 
     def reply(self) -> None:
         msg = self.capivara.current
+        self.note.hide()
+        self.replying = True
+        self.composer.open(self.anchor())
         reply = self.http.get(self.api("/clients"))
         reply.finished.connect(lambda: self.on_reply_clients(reply, msg))
 
@@ -898,17 +909,17 @@ class Window(QWidget):
         if reply.error() == QNetworkReply.NoError:
             people = [c for c in json.loads(bytes(reply.readAll())) if c["online"] and c["id"] == msg.get("sender_id")]
         reply.deleteLater()
-        if self.capivara.state != State.READING or self.capivara.current is not msg:
+        if self.capivara.state != State.READING or self.capivara.current is not msg or not self.composer.isVisible():
             return
         if not people:
+            self.composer.hide()
+            self.note.show_message(msg, self.anchor())
             self.note.flash_offline()
             return
-        self.note.hide()
         read = self.capivara.reply()
         if self.connected:
             self.ws.sendTextMessage(json.dumps({"type": "read", "id": read["id"]}))
-        self.replying = True
-        self.composer.show_people(people, self.anchor())
+        self.composer.set_people(people)
         self.update_mask()
         self.update()
 
@@ -917,6 +928,8 @@ class Window(QWidget):
             self.show_menu()
             return
         self.composer.hide()
+        if self.capivara.state == State.READING:
+            self.note.show_message(self.capivara.current, self.anchor())
         self.capivara.reply_done()
         self.update_mask()
         self.update()
@@ -1039,6 +1052,8 @@ class Window(QWidget):
     def load_clients(self) -> None:
         self.capivara.hover_in()
         self.update_mask()
+        self.replying = False
+        self.composer.open(self.anchor())
         reply = self.http.get(self.api("/clients"))
         reply.finished.connect(lambda: self.on_clients(reply))
 
@@ -1049,9 +1064,9 @@ class Window(QWidget):
                 c for c in json.loads(bytes(reply.readAll()))
                 if c["online"] and c["id"] != self.cfg.client_id
             ]
-        self.replying = False
-        self.composer.show_people(people, self.anchor())
         reply.deleteLater()
+        if self.composer.isVisible() and not self.replying:
+            self.composer.set_people(people)
 
     def send_off(self) -> None:
         self.composer.hide()
