@@ -61,6 +61,14 @@ Baixe o arquivo do seu sistema na página de [Releases](https://github.com/deiva
 
 Quando sair uma versão nova, a capivara avisa e se atualiza sozinha.
 
+### Onde ficam os arquivos no Windows
+
+Não tem instalador: o zoozap roda direto do exe.
+
+- **Executável:** fica onde você salvou o download. Deixe numa pasta do seu usuário (Downloads, Área de Trabalho etc.). Em pastas protegidas, como `C:\Program Files`, a atualização falha com **erro ao atualizar**.
+- **Configuração:** `%APPDATA%\zoozap\config.toml`.
+- **Durante a atualização:** aparecem `zoozap-windows.exe.new` e `zoozap-windows.exe.old` ao lado do exe. O `.old` é apagado sozinho numa próxima abertura.
+
 ## 4. Colar o convite
 
 1. Copie o convite.
