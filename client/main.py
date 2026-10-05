@@ -10,7 +10,7 @@ import sys
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PySide6.QtCore import QPointF, QProcess, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
+from PySide6.QtCore import QEvent, QPointF, QProcess, QRect, QSize, Qt, QTimer, QUrl, QUrlQuery
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
@@ -405,6 +405,7 @@ class Composer(Balloon):
         self.text = QPlainTextEdit()
         self.text.setPlaceholderText("escreva aqui…")
         self.text.setFixedHeight(90)
+        self.text.installEventFilter(self)
         back = QPushButton("◀ VOLTAR")
         back.clicked.connect(on_done)
         self.send_button = QPushButton("▶ ENVIAR")
@@ -457,6 +458,15 @@ class Composer(Balloon):
             return
         self.send_button.setText("enviando…")
         self.on_send(ids, text)
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier):
+                self.text.insertPlainText("\n")
+            else:
+                self.send()
+            return True
+        return super().eventFilter(obj, event)
 
     def flash(self, text: str) -> None:
         self.send_button.setText(text)
