@@ -37,6 +37,7 @@ H = max(sprite.WALK_H, sprite.PEEK_H, sprite.PEEK_W) + 30
 STRIP = 120
 STEP = 0.09
 WALK_STEP = 0.015
+RUN_STEP = 0.03
 HIDE_STEP = 0.045
 BUBBLE_EVERY = 150
 BUBBLE_FIRST = 30
@@ -712,12 +713,17 @@ class Window(QWidget):
     def moving(self) -> bool:
         return self.capivara.state in (State.ENTERING, State.LEAVING)
 
+    def running(self) -> bool:
+        return self.capivara.state == State.ENTERING and len(self.capivara.pile) > 1
+
     def pixmap(self):
         if self.peeking():
             frames = self.pixmaps[f"{'sleep' if self.capivara.asleep else 'peek'}_{self.cfg.edge}"]
             if self.capivara.state != State.PEEKING or self.reveal < 1:
                 return frames[0]
             return frames[self.ticks // sprite.PEEK_TICKS % sprite.FRAMES]
+        if self.running():
+            return self.pixmaps["run"][self.ticks // sprite.RUN_TICKS % sprite.FRAMES]
         walk = self.pixmaps["walk"]
         return walk[self.ticks // sprite.WALK_TICKS % sprite.FRAMES] if self.moving() else walk[0]
 
@@ -823,7 +829,7 @@ class Window(QWidget):
             self.bubbles = []
             self.next_wave = self.clock + BUBBLE_FIRST
         goal = self.target()
-        step = WALK_STEP if self.moving() else HIDE_STEP if self.capivara.state == State.HIDDEN else STEP
+        step = RUN_STEP if self.running() else WALK_STEP if self.moving() else HIDE_STEP if self.capivara.state == State.HIDDEN else STEP
         before = self.pixmap()
         changed = self.reveal != goal
         if changed:
