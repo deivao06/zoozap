@@ -754,6 +754,10 @@ class Window(QWidget):
         return rect.translated(self.pos())
 
     def badge_rect(self) -> QRect:
+        if self.peeking() and self.cfg.edge != "bottom":
+            r = self.capivara_rect()
+            x = r.left() + 5 if self.cfg.edge == "right" else r.right() - 5
+            return QRect(x - 11, r.top() + 5, 22, 22)
         center = self.frame_transform().map(QPointF(*sprite.BADGE_POS))
         return QRect(int(center.x()) - 11, max(int(center.y()) - 11, 0), 22, 22)
 
