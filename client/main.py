@@ -431,7 +431,7 @@ class Composer(Balloon):
         while self.people.count():
             self.people.takeAt(0)
         for person in people:
-            name = person["name"] + (" zz" if person.get("asleep") else "")
+            name = person["name"] + (" (Zzz)" if person.get("asleep") else "")
             button = QPushButton(f"□ {name}", objectName="person", checkable=True)
             button.toggled.connect(lambda on, b=button, n=name: b.setText(f"{'■' if on else '□'} {n}"))
             button.setProperty("cid", person["id"])
